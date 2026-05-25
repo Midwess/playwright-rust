@@ -1963,6 +1963,40 @@ impl Frame {
         Ok(response.snapshot)
     }
 
+    /// Page-scoped ARIA snapshot with a server-side `track` identifier and
+    /// no `selector` parameter. The Playwright server rejects requests that
+    /// combine `selector` and `track`, so this path omits the selector
+    /// entirely and lets the server scope to the main frame's document.
+    ///
+    /// Used by [`Page::aria_snapshot_tracked`].
+    pub(crate) async fn aria_snapshot_tracked_raw(
+        &self,
+        track: &str,
+        timeout: f64,
+        options: Option<&crate::protocol::AriaSnapshotOptions>,
+    ) -> Result<String> {
+        #[derive(Deserialize)]
+        struct AriaSnapshotResponse {
+            snapshot: String,
+        }
+
+        let mut params = serde_json::json!({
+            "timeout": timeout,
+            "track": track,
+        });
+        if let Some(opts) = options {
+            if let Some(mode) = opts.mode {
+                params["mode"] = serde_json::Value::String(mode.as_str().to_string());
+            }
+            if let Some(depth) = opts.depth {
+                params["depth"] = serde_json::Value::from(depth);
+            }
+        }
+
+        let response: AriaSnapshotResponse = self.channel().send("ariaSnapshot", params).await?;
+        Ok(response.snapshot)
+    }
+
     /// Resolves a selector to a best-practices canonical form (preferring
     /// test-ids, ARIA roles, then accessible text). Used by
     /// [`Locator::normalize`].

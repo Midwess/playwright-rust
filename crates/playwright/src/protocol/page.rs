@@ -4098,6 +4098,15 @@ impl Page {
     /// Pass `Some(AriaSnapshotOptions { mode: Some(AriaSnapshotMode::Ai), .. })`
     /// to get the AI-friendly form intended for LLM/codegen consumption.
     ///
+    /// # Note
+    ///
+    /// The `track` field on [`AriaSnapshotOptions`] is forwarded to the
+    /// server alongside the implicit `body` selector. The Playwright
+    /// server rejects requests that combine `selector` and `track` with
+    /// `Protocol error: Cannot specify both selector and track options`.
+    /// Use [`Page::aria_snapshot_tracked`] when a track identifier is
+    /// required.
+    ///
     /// See: <https://playwright.dev/docs/api/class-page#page-aria-snapshot>
     #[tracing::instrument(level = "info", skip_all, fields(guid = %self.guid()))]
     pub async fn aria_snapshot(
@@ -4111,6 +4120,46 @@ impl Page {
             .unwrap_or_else(|| self.default_timeout_ms());
         frame
             .aria_snapshot_raw("body", timeout, options.as_ref())
+            .await
+    }
+
+    /// Returns the ARIA accessibility tree using a server-side `track`
+    /// identifier for incremental snapshots.
+    ///
+    /// The Playwright server returns a full snapshot on the first call
+    /// with a given `track` string and may return an incremental form on
+    /// subsequent calls with the same string. The exact wire format of
+    /// the incremental response is not contractually specified by
+    /// Playwright; treat it as opaque text and diff client-side if you
+    /// need structured deltas.
+    ///
+    /// Unlike [`Page::aria_snapshot`], this method does not send a
+    /// `selector` parameter — the Playwright server rejects the combined
+    /// `selector` + `track` shape. The snapshot is implicitly rooted at
+    /// the main frame's document.
+    ///
+    /// The `track` field on the `options` argument is ignored by this
+    /// method (the `track` function argument is authoritative).
+    ///
+    /// # Errors
+    ///
+    /// Surfaces any [`Error`] from the underlying JSON-RPC call,
+    /// including `Protocol error` responses from the Playwright server.
+    ///
+    /// See: <https://playwright.dev/docs/api/class-page#page-aria-snapshot>
+    #[tracing::instrument(level = "info", skip_all, fields(guid = %self.guid()))]
+    pub async fn aria_snapshot_tracked(
+        &self,
+        track: &str,
+        options: Option<crate::protocol::AriaSnapshotOptions>,
+    ) -> Result<String> {
+        let frame = self.main_frame().await?;
+        let timeout = options
+            .as_ref()
+            .and_then(|o| o.timeout)
+            .unwrap_or_else(|| self.default_timeout_ms());
+        frame
+            .aria_snapshot_tracked_raw(track, timeout, options.as_ref())
             .await
     }
 

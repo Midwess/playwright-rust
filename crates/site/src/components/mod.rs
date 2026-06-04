@@ -1,0 +1,22 @@
+mod code_block;
+mod code_tabs;
+mod comparison;
+mod dogfood_banner;
+mod feature_card;
+mod features;
+mod footer;
+mod hero;
+pub mod icons;
+mod install;
+mod walkthrough;
+
+pub use code_block::CodeBlock;
+pub use code_tabs::CodeTabs;
+pub use comparison::Comparison;
+pub use dogfood_banner::DogfoodBanner;
+pub use feature_card::FeatureCard;
+pub use features::Features;
+pub use footer::Footer;
+pub use hero::Hero;
+pub use install::Install;
+pub use walkthrough::Walkthrough;

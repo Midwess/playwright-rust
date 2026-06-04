@@ -105,6 +105,8 @@ impl TransportSender for WebSocketTransportSender {
             let json_str = serde_json::to_string(&message)
                 .map_err(|e| Error::TransportError(format!("Failed to serialize JSON: {}", e)))?;
 
+            tracing::trace!(bytes_len = json_str.len(), "transport_send");
+
             self.sender
                 .send(WsMessage::Text(json_str.into()))
                 .await

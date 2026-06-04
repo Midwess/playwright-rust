@@ -286,17 +286,16 @@ impl Connection {
         }
     }
 
+    #[tracing::instrument(
+        level = "trace",
+        skip_all,
+        fields(guid = %guid, method = %method, id = tracing::field::Empty)
+    )]
     pub async fn send_message(&self, guid: String, method: String, params: Value) -> Result<Value> {
         self.assert_same_runtime();
 
         let id = self.last_id.fetch_add(1, Ordering::SeqCst);
-
-        tracing::trace!(
-            "Sending message: id={}, guid='{}', method='{}'",
-            id,
-            guid,
-            method
-        );
+        tracing::Span::current().record("id", id);
 
         let (tx, rx) = oneshot::channel();
         self.callbacks.lock().await.insert(id, tx);
@@ -414,6 +413,7 @@ impl Connection {
         self.dispatch_internal(message).await
     }
 
+    #[tracing::instrument(name = "dispatch", level = "trace", skip_all)]
     async fn dispatch_internal(self: &Arc<Self>, message: Message) -> Result<()> {
         tracing::trace!("Dispatching message: {:?}", message);
         match message {

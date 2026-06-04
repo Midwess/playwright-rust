@@ -1,11 +1,20 @@
 //! Build script for playwright-rs
 //!
-//! Downloads and extracts the Playwright Node.js driver from Azure CDN
-//! into Cargo's `$OUT_DIR`. The runtime side (`src/server/driver.rs`)
-//! picks the path up via compile-time `option_env!()` lookups. Because
-//! `$OUT_DIR` lives inside `target/`, the driver is automatically cached
-//! by any `target/`-cache configuration in CI (e.g. `Swatinem/rust-cache`).
-//! No manual driver-cache step is needed.
+//! Downloads and extracts the Playwright Node.js driver from Azure CDN.
+//! The runtime side (`src/server/driver.rs`) picks the path up via
+//! compile-time `option_env!()` lookups.
+//!
+//! By default the driver lands in Cargo's `$OUT_DIR` (inside `target/`),
+//! which is fine for local dev. Two env knobs tune it for CI:
+//!
+//! - `PLAYWRIGHT_DRIVER_CACHE_DIR` relocates the download to a stable,
+//!   version-keyed path so CI can cache it on its own key. This is needed
+//!   because `Swatinem/rust-cache` prunes workspace build-script output —
+//!   a driver left in `$OUT_DIR` is NOT cached by it and re-downloads every
+//!   run. The driver belongs in its own `actions/cache`, like the browsers.
+//! - `PLAYWRIGHT_SKIP_DRIVER_DOWNLOAD` skips the download entirely for
+//!   compile-only jobs (e.g. the MSRV `cargo check`) that never launch a
+//!   browser, saving a ~42 MB fetch.
 
 use std::env;
 use std::fs;
@@ -17,17 +26,32 @@ const DRIVER_BASE_URL: &str = "https://playwright.azureedge.net/builds/driver";
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-env-changed=PLAYWRIGHT_DRIVER_CACHE_DIR");
+    println!("cargo:rerun-if-env-changed=PLAYWRIGHT_SKIP_DRIVER_DOWNLOAD");
 
-    // Skip driver download on docs.rs — it has no network access and doesn't need drivers
-    if std::env::var("DOCS_RS").is_ok() {
+    // Skip the download on docs.rs (no network) and for compile-only jobs
+    // (e.g. MSRV `cargo check`, mutation testing) that never launch a browser.
+    if env::var_os("DOCS_RS").is_some() || env::var_os("PLAYWRIGHT_SKIP_DRIVER_DOWNLOAD").is_some()
+    {
         println!("cargo:rustc-env=PLAYWRIGHT_DRIVER_DIR=");
         println!("cargo:rustc-env=PLAYWRIGHT_DRIVER_VERSION={PLAYWRIGHT_VERSION}");
-        println!("cargo:rustc-env=PLAYWRIGHT_DRIVER_PLATFORM=docs-rs");
+        println!("cargo:rustc-env=PLAYWRIGHT_DRIVER_PLATFORM=skipped");
+        println!("cargo:rustc-env=PLAYWRIGHT_DRIVER_DIR_SOURCE=skipped");
         return;
     }
 
-    let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR set by Cargo"));
-    let drivers_dir = out_dir.join("playwright-driver");
+    // Default to OUT_DIR; PLAYWRIGHT_DRIVER_CACHE_DIR relocates the driver to a
+    // stable, version-keyed path that CI can cache on its own key (see header).
+    // The source is recorded so tests can assert the OUT_DIR layout only when
+    // it actually applies.
+    let (drivers_dir, source) = match env::var_os("PLAYWRIGHT_DRIVER_CACHE_DIR") {
+        Some(dir) => (PathBuf::from(dir), "cache_dir"),
+        None => {
+            let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR set by Cargo"));
+            (out_dir.join("playwright-driver"), "out_dir")
+        }
+    };
+    println!("cargo:rustc-env=PLAYWRIGHT_DRIVER_DIR_SOURCE={source}");
 
     let platform = detect_platform();
     let driver_dir = drivers_dir.join(format!("playwright-{PLAYWRIGHT_VERSION}-{platform}"));

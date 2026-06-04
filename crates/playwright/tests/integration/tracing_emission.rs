@@ -118,6 +118,28 @@ async fn test_tracing_records_completion_field_via_span_record() {
 }
 
 #[tokio::test]
+async fn test_tracing_trace_spans_cover_rpc_layer() {
+    let (cap, _guard) = install_subscriber("playwright_rs=trace");
+    let (_pw, browser, page) = crate::common::setup().await;
+
+    page.goto("data:text/html,<h1>hi</h1>", None)
+        .await
+        .expect("goto failed");
+
+    browser.close().await.expect("close failed");
+
+    let out = cap.dump();
+    assert!(
+        out.contains("send_message") && out.contains("method="),
+        "expected a trace-level send_message span carrying the RPC method:\n{out}"
+    );
+    assert!(
+        out.contains("transport_send") && out.contains("bytes_len="),
+        "expected a trace-level transport_send span carrying the frame size:\n{out}"
+    );
+}
+
+#[tokio::test]
 async fn test_tracing_spawn_propagation_keeps_user_span_as_parent() {
     let (cap, _guard) = install_subscriber("playwright_rs=info,tracing_emission_test=info");
     let (_pw, browser, page) = crate::common::setup().await;

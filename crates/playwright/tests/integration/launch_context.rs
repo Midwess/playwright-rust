@@ -275,10 +275,11 @@ async fn test_launch_persistent_context_cross_browser() {
     //
     // Known Windows limitation (issue #39): WebKit persistent context fails on
     // native Windows with "Initial load failed" in
-    // wkPage.js:handleProvisionalLoadFailed. Microsoft tracks this under
-    // playwright#36936 (WebKit crashes on Win10/Server 16) and is building a
-    // `channel: "webkit-wsl"` replacement (playwright#37036). Re-test after
-    // webkit-wsl GAs or WebKit Windows builds stabilize.
+    // wkPage.js:handleProvisionalLoadFailed. Upstream has no active remedy:
+    // playwright#36936 (WebKit crashes on Win10/Server 16) was closed by triage
+    // for low engagement, not fixed, and the proposed `webkit-wsl` replacement
+    // (playwright#37036) was closed not-planned. Stays gated on Windows until
+    // upstream is re-engaged or WebKit Windows builds stabilize.
     if !cfg!(target_os = "windows") {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let user_data_dir = temp_dir.path().to_str().unwrap().to_string();

@@ -1,0 +1,10 @@
+[build]
+target = "index.html"
+# Served at the apex of the custom domain (playwright-rust.dev), so the public
+# URL is the site root.
+public_url = "/"
+
+[tools]
+# Pin the Tailwind v4 standalone binary (Trunk defaults to a v3 release, which
+# can't parse our v4 `@import "tailwindcss"` / `@theme` input.css).
+tailwindcss = "4.3.0"

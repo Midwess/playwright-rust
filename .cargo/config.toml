@@ -6,3 +6,11 @@
 #
 # Example: `cargo xtask regenerate-trace-fixture`
 xtask = "run --package xtask --release --"
+
+[build]
+# Disabled because this crate builds many permutations — default,
+# --all-features, --features cli, --all-targets — plus per-diff mutation
+# testing and fuzzing, none of which benefit from incremental (it's tuned
+# for repeated single-config edit/rebuild loops). Left on, its cache grew
+# to 50–70 GB in target/debug/incremental with no payoff here.
+incremental = false

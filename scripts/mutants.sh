@@ -33,6 +33,16 @@ set -euo pipefail
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 
+# Mutation testing runs lib + serialization tests only (see
+# .cargo/mutants.toml) — never a browser — so skip the ~42 MB Playwright
+# driver download build.rs would otherwise do in every scratch build.
+export PLAYWRIGHT_SKIP_DRIVER_DOWNLOAD=1
+
+# Incremental is disabled globally (.cargo/config.toml) because it bloated
+# target/ with no payoff for normal builds, but cargo-mutants rebuilds once
+# per mutant and genuinely benefits from it — re-enable for mutation runs.
+export CARGO_INCREMENTAL=1
+
 # --- Project-specific pre-setup ----------------------------------------
 # cargo-mutants copies the source tree to a tempdir before building.
 # Anything the build expects but that isn't checked in (wasm-pack
@@ -40,10 +50,9 @@ cd "$REPO_ROOT"
 # bindings, etc.) won't follow. Mutation testing doesn't exercise those
 # bytes at runtime, so empty placeholders are enough.
 #
-# playwright-rust currently has no such artifacts — the Playwright
-# driver is downloaded at build time into $OUT_DIR, which the temp
-# build will re-download. Add placeholders here if a future change
-# starts include!()-ing checked-out-only files.
+# playwright-rust currently has no such artifacts (the Playwright driver
+# is skipped above). Add placeholders here if a future change starts
+# include!()-ing checked-out-only files.
 # -----------------------------------------------------------------------
 
 # Resolve the base ref: first non-dash positional arg, defaulting to

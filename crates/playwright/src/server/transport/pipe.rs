@@ -7,6 +7,12 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc;
 
 /// Send a JSON message using length-prefixed framing
+#[tracing::instrument(
+    name = "transport_send",
+    level = "trace",
+    skip_all,
+    fields(bytes_len = tracing::field::Empty)
+)]
 pub async fn send_message<W>(stdin: &mut W, message: JsonValue) -> Result<()>
 where
     W: AsyncWriteExt + Unpin,
@@ -16,6 +22,7 @@ where
         .map_err(|e| Error::TransportError(format!("Failed to serialize JSON: {}", e)))?;
 
     let length = json_bytes.len() as u32;
+    tracing::Span::current().record("bytes_len", length);
 
     // Write 4-byte little-endian length prefix
     stdin
@@ -91,6 +98,7 @@ where
             }
 
             let length = u32::from_le_bytes(len_buf) as usize;
+            tracing::trace!(bytes_len = length, "received rpc frame");
 
             // Read message payload
             let message_buf = if length <= CHUNK_SIZE {

@@ -5,6 +5,14 @@ members = [
     "crates/playwright-rs-trace",
     "crates/xtask",
 ]
+# The landing-page crates are a wasm32 Leptos CSR app (built by Trunk) and its
+# native dogfood test. They're excluded so workspace-wide cargo commands and
+# the publishable crates' supply-chain graph stay unaffected; pages.yml builds
+# and tests them on their own.
+exclude = [
+    "crates/site",
+    "crates/site-e2e",
+]
 resolver = "2"
 
 [workspace.package]

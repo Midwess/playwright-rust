@@ -1,0 +1,102 @@
+name: Pages
+
+# Builds the Leptos landing page (crates/site) and only deploys it if the
+# playwright-rs dogfood test (crates/site-e2e) passes against the built output.
+# Those crates are excluded from the root workspace, so this is the only
+# workflow that builds/tests them.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "crates/site/**"
+      - "crates/site-e2e/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time; let an in-progress run finish (don't cancel a deploy).
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build-test:
+    name: Build + dogfood test
+    runs-on: ubuntu-latest
+    env:
+      # Driver to a stable, version-keyed path cached on its own key (see the
+      # decoupling in build.rs); shared by the playwright-rs CLI and site-e2e.
+      PLAYWRIGHT_DRIVER_CACHE_DIR: ${{ github.workspace }}/.playwright-driver
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            crates/site
+            crates/site-e2e
+
+      - name: Install Trunk
+        uses: taiki-e/install-action@v2
+        with:
+          tool: trunk
+
+      - name: Cache Playwright driver
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/.playwright-driver
+          key: ${{ runner.os }}-pw-driver-1.60.0
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-browsers-1.60.0-v2
+          restore-keys: ${{ runner.os }}-playwright-browsers-1.60.0-
+
+      # The site crates are outside the workspace, so the workspace-wide fmt/
+      # clippy in test.yml never sees them — check them here.
+      - name: Format + lint site crates
+        run: |
+          cargo fmt --manifest-path crates/site/Cargo.toml -- --check
+          cargo fmt --manifest-path crates/site-e2e/Cargo.toml -- --check
+          cargo clippy --manifest-path crates/site/Cargo.toml --target wasm32-unknown-unknown --all-targets -- -D warnings
+          cargo clippy --manifest-path crates/site-e2e/Cargo.toml --all-targets -- -D warnings
+
+      - name: Build site
+        run: cd crates/site && trunk build --release
+
+      - name: Install Chromium
+        run: cargo run --release -p playwright-rs --bin playwright-rs --features cli -- install chromium --with-deps
+
+      - name: Dogfood test (deploy gate)
+        run: cargo test --manifest-path crates/site-e2e/Cargo.toml
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: crates/site/dist
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build-test
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

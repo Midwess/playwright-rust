@@ -19,7 +19,7 @@ use crate::error::{Error, Result};
 ///
 /// # Usage
 ///
-/// ```ignore
+/// ```no_run
 /// use playwright_rs::protocol::Playwright;
 ///
 /// #[tokio::main]

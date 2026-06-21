@@ -22,7 +22,7 @@ const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use playwright_rs::{expect, protocol::Playwright};
 /// use std::time::Duration;
 ///
@@ -840,10 +840,31 @@ impl Expectation {
     ///
     /// See: <https://playwright.dev/docs/api/class-locatorassertions#locator-assertions-to-have-css>
     pub async fn to_have_css(self, name: &str, value: &str) -> Result<()> {
+        self.to_have_css_inner(name, value, None).await
+    }
+
+    /// Asserts the computed CSS of a **pseudo-element** (e.g. `"::before"`,
+    /// `"::after"`) matches `value`. Otherwise like
+    /// [`to_have_css`](Self::to_have_css).
+    ///
+    /// See: <https://playwright.dev/docs/api/class-locatorassertions#locator-assertions-to-have-css>
+    pub async fn to_have_css_pseudo(self, name: &str, value: &str, pseudo: &str) -> Result<()> {
+        self.to_have_css_inner(name, value, Some(pseudo)).await
+    }
+
+    async fn to_have_css_inner(self, name: &str, value: &str, pseudo: Option<&str>) -> Result<()> {
         let start = std::time::Instant::now();
         let selector = self.locator.selector().to_string();
+        let getter = match pseudo {
+            Some(p) => format!(
+                "getComputedStyle(el, {})",
+                serde_json::to_string(p).unwrap()
+            ),
+            None => "getComputedStyle(el)".to_string(),
+        };
         let expr = format!(
-            "(el) => getComputedStyle(el).getPropertyValue({})",
+            "(el) => {}.getPropertyValue({})",
+            getter,
             serde_json::to_string(name).unwrap()
         );
 
@@ -957,12 +978,19 @@ impl Expectation {
     /// The `expected` string is a YAML representation of the accessibility tree.
     /// The Playwright server handles auto-retrying within the assertion timeout.
     ///
-    /// # Example (in module-level doctest)
+    /// # Example
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # use playwright_rs::{Playwright, expect};
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let pw = Playwright::launch().await?;
+    /// # let browser = pw.chromium().launch().await?;
+    /// # let page = browser.new_page().await?;
     /// expect(page.locator("body").await)
     ///     .to_match_aria_snapshot("- heading \"Hello\" [level=1]\n- button \"Click me\"")
     ///     .await?;
+    /// # Ok(())
+    /// # }
     /// ```
     ///
     /// See: <https://playwright.dev/docs/api/class-locatorassertions#locator-assertions-to-match-aria-snapshot>
@@ -1073,23 +1101,17 @@ fn build_mask_js(locators: &[Locator]) -> String {
     selectors.join("\n")
 }
 
-/// Animation control for screenshots
-///
-/// See: <https://playwright.dev/docs/api/class-locatorassertions#locator-assertions-to-have-screenshot-1>
+// `Animations` lives in the always-available screenshot module (shared with
+// `ScreenshotOptions`); the screenshot-diff assertions reuse it.
 #[cfg(feature = "screenshot-diff")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Animations {
-    /// Allow animations to run normally
-    Allow,
-    /// Disable CSS animations and transitions before capturing
-    Disabled,
-}
+use crate::protocol::Animations;
 
 /// Options for screenshot assertions
 ///
 /// See: <https://playwright.dev/docs/api/class-locatorassertions#locator-assertions-to-have-screenshot-1>
 #[cfg(feature = "screenshot-diff")]
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct ScreenshotAssertionOptions {
     /// Maximum number of different pixels allowed (default: 0)
     pub max_diff_pixels: Option<u32>,
@@ -1297,6 +1319,48 @@ impl PageExpectation {
 
             tokio::time::sleep(self.poll_interval).await;
         }
+    }
+
+    /// Asserts that the page's accessibility tree matches the expected ARIA snapshot.
+    ///
+    /// The page-level counterpart of
+    /// [`Expectation::to_match_aria_snapshot`]; it matches the whole document
+    /// (rooted at `:root`). The `expected` string is a YAML representation of
+    /// the accessibility tree, and the Playwright server auto-retries within the
+    /// assertion timeout.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use playwright_rs::{Playwright, expect_page};
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let pw = Playwright::launch().await?;
+    /// # let browser = pw.chromium().launch().await?;
+    /// # let page = browser.new_page().await?;
+    /// expect_page(&page)
+    ///     .to_match_aria_snapshot("- heading \"Welcome\" [level=1]")
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// See: <https://playwright.dev/docs/api/class-pageassertions#page-assertions-to-match-aria-snapshot>
+    pub async fn to_match_aria_snapshot(self, expected: &str) -> Result<()> {
+        use crate::protocol::serialize_argument;
+
+        let timeout_ms = self.timeout.as_millis() as f64;
+        let expected_value = serialize_argument(&serde_json::Value::String(expected.to_string()));
+
+        let frame = self.page.main_frame().await?;
+        frame
+            .frame_expect(
+                ":root",
+                "to.match.aria",
+                expected_value,
+                self.negate,
+                timeout_ms,
+            )
+            .await
     }
 
     /// Asserts that the page URL matches the expected string.

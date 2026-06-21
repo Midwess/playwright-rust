@@ -545,3 +545,202 @@ async fn test_context_on_dialog() {
 
     browser.close().await.expect("Failed to close browser");
 }
+
+// --- Context-level 1.60 lifecycle event mirrors (forwarded from pages) ---
+
+async fn wait_at_least(c: &std::sync::atomic::AtomicUsize, min: usize, ms: u64) -> bool {
+    use std::sync::atomic::Ordering;
+    let mut waited = 0u64;
+    while c.load(Ordering::SeqCst) < min && waited < ms {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        waited += 50;
+    }
+    c.load(Ordering::SeqCst) >= min
+}
+
+#[tokio::test]
+async fn test_context_on_page_load_and_close() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let (playwright, browser, context) = crate::common::setup_context().await;
+
+    let loads = Arc::new(AtomicUsize::new(0));
+    let closes = Arc::new(AtomicUsize::new(0));
+    let (l, cl) = (loads.clone(), closes.clone());
+    context
+        .on_page_load(move |_p| {
+            let l = l.clone();
+            async move {
+                l.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+        })
+        .await
+        .expect("on_page_load");
+    context
+        .on_page_close(move |_p| {
+            let cl = cl.clone();
+            async move {
+                cl.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+        })
+        .await
+        .expect("on_page_close");
+
+    let page = context.new_page().await.expect("new page");
+    page.goto("data:text/html,<h1>hi</h1>", None)
+        .await
+        .expect("goto");
+    assert!(
+        wait_at_least(&loads, 1, 5000).await,
+        "context on_page_load should fire after a page loads"
+    );
+
+    page.close().await.expect("close page");
+    assert!(
+        wait_at_least(&closes, 1, 5000).await,
+        "context on_page_close should fire after a page closes"
+    );
+
+    context.close().await.ok();
+    browser.close().await.ok();
+    drop(playwright);
+}
+
+#[tokio::test]
+async fn test_context_on_frame_navigated() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let (playwright, browser, context) = crate::common::setup_context().await;
+    let count = Arc::new(AtomicUsize::new(0));
+    let c = count.clone();
+    context
+        .on_frame_navigated(move |_f| {
+            let c = c.clone();
+            async move {
+                c.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+        })
+        .await
+        .expect("on_frame_navigated");
+
+    let page = context.new_page().await.expect("new page");
+    page.goto("data:text/html,<h1>nav</h1>", None)
+        .await
+        .expect("goto");
+    assert!(
+        wait_at_least(&count, 1, 5000).await,
+        "context on_frame_navigated should fire on main-frame navigation"
+    );
+
+    context.close().await.ok();
+    browser.close().await.ok();
+    drop(playwright);
+}
+
+#[tokio::test]
+async fn test_context_on_frame_attached() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let server = TestServer::start().await;
+    let (playwright, browser, context) = crate::common::setup_context().await;
+    let count = Arc::new(AtomicUsize::new(0));
+    let c = count.clone();
+    context
+        .on_frame_attached(move |_f| {
+            let c = c.clone();
+            async move {
+                c.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+        })
+        .await
+        .expect("on_frame_attached");
+
+    let page = context.new_page().await.expect("new page");
+    page.goto(&format!("{}/frame.html", server.url()), None)
+        .await
+        .expect("goto frame.html");
+    assert!(
+        wait_at_least(&count, 1, 5000).await,
+        "context on_frame_attached should fire when an iframe attaches"
+    );
+
+    context.close().await.ok();
+    browser.close().await.ok();
+    server.shutdown();
+    drop(playwright);
+}
+
+#[tokio::test]
+async fn test_context_on_download() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let (playwright, browser, context) = crate::common::setup_context().await;
+    let count = Arc::new(AtomicUsize::new(0));
+    let c = count.clone();
+    context
+        .on_download(move |_d| {
+            let c = c.clone();
+            async move {
+                c.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+        })
+        .await
+        .expect("on_download");
+
+    let page = context.new_page().await.expect("new page");
+    page.set_content(
+        "<a id='dl' href=\"data:text/plain,hello\" download=\"t.txt\">x</a>",
+        None,
+    )
+    .await
+    .expect("set_content");
+    page.locator("#dl").await.click(None).await.expect("click");
+    assert!(
+        wait_at_least(&count, 1, 5000).await,
+        "context on_download should fire when a page starts a download"
+    );
+
+    context.close().await.ok();
+    browser.close().await.ok();
+    drop(playwright);
+}
+
+#[tokio::test]
+async fn test_context_weberror_location() {
+    let (playwright, browser, context) = crate::common::setup_context().await;
+    let captured: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
+    let c = captured.clone();
+    context
+        .on_weberror(move |we| {
+            let c = c.clone();
+            async move {
+                *c.lock().unwrap() = Some(we.location().is_some());
+                Ok(())
+            }
+        })
+        .await
+        .expect("on_weberror");
+
+    let page = context.new_page().await.expect("new page");
+    page.goto("about:blank", None).await.ok();
+    let _ = page
+        .evaluate_value("setTimeout(() => { throw new Error('boom') }, 0)")
+        .await;
+
+    let mut waited = 0u64;
+    while captured.lock().unwrap().is_none() && waited < 5000 {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        waited += 50;
+    }
+    let had_location = captured.lock().unwrap().take();
+    assert_eq!(
+        had_location,
+        Some(true),
+        "weberror should carry a source location"
+    );
+
+    context.close().await.ok();
+    browser.close().await.ok();
+    drop(playwright);
+}

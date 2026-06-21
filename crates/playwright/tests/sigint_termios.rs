@@ -36,7 +36,14 @@ fn expect_available() -> bool {
         .unwrap_or(false)
 }
 
+// Heavy: drives four chromium-launching scenarios through an expect/pty
+// harness (~25s, dominated by the per-scenario browser launches, not the
+// build). Kept out of the default dev-loop run; CI exercises it in the
+// `--run-ignored` lane (single-threaded, which suits a terminal test).
+// Run locally with:
+//   cargo nextest run -p playwright-rs --run-ignored ignored-only -E 'test(sigint)'
 #[test]
+#[ignore = "heavy pty/expect + chromium harness; runs in CI's --run-ignored lane"]
 fn sigint_does_not_break_terminal_termios() {
     if !expect_available() {
         eprintln!("[sigint_termios] `expect` not on PATH — skipping");
@@ -45,11 +52,14 @@ fn sigint_does_not_break_terminal_termios() {
 
     let root = workspace_root();
 
-    // Build the reproducer example in release mode.
+    // Build the reproducer example in debug, not release: the integration
+    // suite already compiles playwright-rs in debug, so this reuses that
+    // rlib and only links the small example (seconds) instead of a cold
+    // release build of the whole crate (~30s). The terminal-termios
+    // behavior under SIGINT is independent of optimization level.
     let build_status = Command::new(env!("CARGO"))
         .args([
             "build",
-            "--release",
             "--example",
             "sigint_repro",
             "--package",
@@ -60,7 +70,7 @@ fn sigint_does_not_break_terminal_termios() {
         .expect("failed to invoke cargo build");
     assert!(build_status.success(), "cargo build of sigint_repro failed");
 
-    let bin = root.join("target/release/examples/sigint_repro");
+    let bin = root.join("target/debug/examples/sigint_repro");
     assert!(bin.is_file(), "expected built example at {}", bin.display());
 
     let scratch = std::env::temp_dir().join("playwright-rs-sigint-termios");

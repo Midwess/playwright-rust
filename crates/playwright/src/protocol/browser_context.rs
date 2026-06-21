@@ -11,7 +11,9 @@ use crate::protocol::cdp_session::CDPSession;
 use crate::protocol::event_waiter::EventWaiter;
 use crate::protocol::route::UnrouteBehavior;
 use crate::protocol::tracing::Tracing;
-use crate::protocol::{Browser, Page, ProxySettings, Request, ResponseObject, Route};
+use crate::protocol::{
+    Browser, Download, Frame, Page, ProxySettings, Request, ResponseObject, Route,
+};
 use crate::server::channel::Channel;
 use crate::server::channel_owner::{ChannelOwner, ChannelOwnerImpl, ParentOrConnection};
 use crate::server::connection::ConnectionExt;
@@ -33,7 +35,7 @@ use tokio::sync::oneshot;
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use playwright_rs::protocol::Playwright;
 ///
 /// #[tokio::main]
@@ -143,6 +145,18 @@ type ServiceWorkerHandlerFuture = Pin<Box<dyn Future<Output = Result<()>> + Send
 type ServiceWorkerHandler =
     Arc<dyn Fn(crate::protocol::Worker) -> ServiceWorkerHandlerFuture + Send + Sync>;
 
+/// Context-level event handlers for the 1.60 lifecycle events. These are not
+/// wire events on the context channel; they are forwarded from each page's
+/// own events (see `wire_*` helpers), matching how the upstream clients
+/// synthesize them.
+type CtxHandlerFuture = Pin<Box<dyn Future<Output = Result<()>> + Send>>;
+/// Context `download` handler (receives the page's `Download`).
+type DownloadHandler = Arc<dyn Fn(Download) -> CtxHandlerFuture + Send + Sync>;
+/// Context frame handler (`frameAttached`/`frameDetached`/`frameNavigated`).
+type CtxFrameHandler = Arc<dyn Fn(Frame) -> CtxHandlerFuture + Send + Sync>;
+/// Context page-lifecycle handler (`pageLoad`/`pageClose`), receives the `Page`.
+type PageEventHandler = Arc<dyn Fn(Page) -> CtxHandlerFuture + Send + Sync>;
+
 /// Binding callback: receives deserialized JS args, returns a JSON value
 type BindingCallback = Arc<dyn Fn(Vec<serde_json::Value>) -> BindingCallbackFuture + Send + Sync>;
 
@@ -210,6 +224,13 @@ pub struct BrowserContext {
     weberror_handlers: Arc<Mutex<Vec<WebErrorHandler>>>,
     /// Context-level service worker event handlers (fired when a service worker is registered)
     serviceworker_handlers: Arc<Mutex<Vec<ServiceWorkerHandler>>>,
+    /// Context-level lifecycle handlers, forwarded from each page's events.
+    download_handlers: Arc<Mutex<Vec<DownloadHandler>>>,
+    frame_attached_handlers: Arc<Mutex<Vec<CtxFrameHandler>>>,
+    frame_detached_handlers: Arc<Mutex<Vec<CtxFrameHandler>>>,
+    frame_navigated_handlers: Arc<Mutex<Vec<CtxFrameHandler>>>,
+    page_load_handlers: Arc<Mutex<Vec<PageEventHandler>>>,
+    page_close_handlers: Arc<Mutex<Vec<PageEventHandler>>>,
     /// One-shot senders waiting for the next "request" event (expect_event("request"))
     request_waiters: Arc<Mutex<Vec<oneshot::Sender<Request>>>>,
     /// One-shot senders waiting for the next "response" event (expect_event("response"))
@@ -310,6 +331,12 @@ impl BrowserContext {
             console_waiters: Arc::new(Mutex::new(Vec::new())),
             weberror_handlers: Arc::new(Mutex::new(Vec::new())),
             serviceworker_handlers: Arc::new(Mutex::new(Vec::new())),
+            download_handlers: Arc::new(Mutex::new(Vec::new())),
+            frame_attached_handlers: Arc::new(Mutex::new(Vec::new())),
+            frame_detached_handlers: Arc::new(Mutex::new(Vec::new())),
+            frame_navigated_handlers: Arc::new(Mutex::new(Vec::new())),
+            page_load_handlers: Arc::new(Mutex::new(Vec::new())),
+            page_close_handlers: Arc::new(Mutex::new(Vec::new())),
             request_waiters: Arc::new(Mutex::new(Vec::new())),
             response_waiters: Arc::new(Mutex::new(Vec::new())),
             weberror_waiters: Arc::new(Mutex::new(Vec::new())),
@@ -716,24 +743,26 @@ impl BrowserContext {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # use playwright_rs::Playwright;
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let pw = Playwright::launch().await?;
+    /// # let browser = pw.chromium().launch().await?;
+    /// # let context = browser.new_context().await?;
     /// use playwright_rs::protocol::{Cookie, StorageState};
     ///
     /// // Restore session cookie
-    /// let state = StorageState {
-    ///     cookies: vec![Cookie {
-    ///         name: "session".to_string(),
-    ///         value: "token123".to_string(),
-    ///         domain: "example.com".to_string(),
-    ///         path: "/".to_string(),
-    ///         expires: -1.0,
-    ///         http_only: true,
-    ///         secure: true,
-    ///         same_site: Some("Lax".to_string()),
-    ///     }],
-    ///     origins: vec![],
-    /// };
+    /// let state = StorageState::default().cookies(vec![
+    ///     Cookie::new("session", "token123")
+    ///         .domain("example.com")
+    ///         .path("/")
+    ///         .http_only(true)
+    ///         .secure(true)
+    ///         .same_site("Lax"),
+    /// ]);
     /// context.set_storage_state(state).await?;
+    /// # Ok(())
+    /// # }
     /// ```
     ///
     /// See: <https://playwright.dev/docs/api/class-browsercontext#browser-context-set-storage-state>
@@ -1233,6 +1262,232 @@ impl BrowserContext {
         Ok(())
     }
 
+    /// Adds a listener for the `download` event: fired when any page in the
+    /// context starts a download. Forwarded from each page's own `download`
+    /// event.
+    ///
+    /// See: <https://playwright.dev/docs/api/class-browsercontext#browser-context-event-download>
+    #[tracing::instrument(level = "debug", skip_all, fields(guid = %self.guid()))]
+    pub async fn on_download<F, Fut>(&self, handler: F) -> Result<()>
+    where
+        F: Fn(Download) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<()>> + Send + 'static,
+    {
+        let handler = Arc::new(move |d: Download| -> CtxHandlerFuture { Box::pin(handler(d)) });
+        let was_empty = self.download_handlers.lock().unwrap().is_empty();
+        self.download_handlers.lock().unwrap().push(handler);
+        if was_empty {
+            for page in self.pages() {
+                Self::wire_download(&page, self.download_handlers.clone()).await;
+            }
+        }
+        Ok(())
+    }
+
+    /// Adds a listener for the `frameAttached` event: fired when a frame is
+    /// attached in any page of the context. Forwarded from each page.
+    ///
+    /// See: <https://playwright.dev/docs/api/class-browsercontext#browser-context-event-frame-attached>
+    #[tracing::instrument(level = "debug", skip_all, fields(guid = %self.guid()))]
+    pub async fn on_frame_attached<F, Fut>(&self, handler: F) -> Result<()>
+    where
+        F: Fn(Frame) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<()>> + Send + 'static,
+    {
+        let handler = Arc::new(move |f: Frame| -> CtxHandlerFuture { Box::pin(handler(f)) });
+        let was_empty = self.frame_attached_handlers.lock().unwrap().is_empty();
+        self.frame_attached_handlers.lock().unwrap().push(handler);
+        if was_empty {
+            for page in self.pages() {
+                Self::wire_frame_attached(&page, self.frame_attached_handlers.clone()).await;
+            }
+        }
+        Ok(())
+    }
+
+    /// Adds a listener for the `frameDetached` event: fired when a frame is
+    /// detached in any page of the context. Forwarded from each page.
+    ///
+    /// See: <https://playwright.dev/docs/api/class-browsercontext#browser-context-event-frame-detached>
+    #[tracing::instrument(level = "debug", skip_all, fields(guid = %self.guid()))]
+    pub async fn on_frame_detached<F, Fut>(&self, handler: F) -> Result<()>
+    where
+        F: Fn(Frame) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<()>> + Send + 'static,
+    {
+        let handler = Arc::new(move |f: Frame| -> CtxHandlerFuture { Box::pin(handler(f)) });
+        let was_empty = self.frame_detached_handlers.lock().unwrap().is_empty();
+        self.frame_detached_handlers.lock().unwrap().push(handler);
+        if was_empty {
+            for page in self.pages() {
+                Self::wire_frame_detached(&page, self.frame_detached_handlers.clone()).await;
+            }
+        }
+        Ok(())
+    }
+
+    /// Adds a listener for the `frameNavigated` event: fired when a frame
+    /// navigates in any page of the context. Forwarded from each page.
+    ///
+    /// See: <https://playwright.dev/docs/api/class-browsercontext#browser-context-event-frame-navigated>
+    #[tracing::instrument(level = "debug", skip_all, fields(guid = %self.guid()))]
+    pub async fn on_frame_navigated<F, Fut>(&self, handler: F) -> Result<()>
+    where
+        F: Fn(Frame) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<()>> + Send + 'static,
+    {
+        let handler = Arc::new(move |f: Frame| -> CtxHandlerFuture { Box::pin(handler(f)) });
+        let was_empty = self.frame_navigated_handlers.lock().unwrap().is_empty();
+        self.frame_navigated_handlers.lock().unwrap().push(handler);
+        if was_empty {
+            for page in self.pages() {
+                Self::wire_frame_navigated(&page, self.frame_navigated_handlers.clone()).await;
+            }
+        }
+        Ok(())
+    }
+
+    /// Adds a listener for the `pageLoad` event: fired when any page in the
+    /// context fires its `load` event. The handler receives that `Page`.
+    ///
+    /// See: <https://playwright.dev/docs/api/class-browsercontext#browser-context-event-page-load>
+    #[tracing::instrument(level = "debug", skip_all, fields(guid = %self.guid()))]
+    pub async fn on_page_load<F, Fut>(&self, handler: F) -> Result<()>
+    where
+        F: Fn(Page) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<()>> + Send + 'static,
+    {
+        let handler = Arc::new(move |p: Page| -> CtxHandlerFuture { Box::pin(handler(p)) });
+        let was_empty = self.page_load_handlers.lock().unwrap().is_empty();
+        self.page_load_handlers.lock().unwrap().push(handler);
+        if was_empty {
+            for page in self.pages() {
+                Self::wire_page_load(&page, self.page_load_handlers.clone()).await;
+            }
+        }
+        Ok(())
+    }
+
+    /// Adds a listener for the `pageClose` event: fired when any page in the
+    /// context closes. The handler receives that `Page`.
+    ///
+    /// See: <https://playwright.dev/docs/api/class-browsercontext#browser-context-event-page-close>
+    #[tracing::instrument(level = "debug", skip_all, fields(guid = %self.guid()))]
+    pub async fn on_page_close<F, Fut>(&self, handler: F) -> Result<()>
+    where
+        F: Fn(Page) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<()>> + Send + 'static,
+    {
+        let handler = Arc::new(move |p: Page| -> CtxHandlerFuture { Box::pin(handler(p)) });
+        let was_empty = self.page_close_handlers.lock().unwrap().is_empty();
+        self.page_close_handlers.lock().unwrap().push(handler);
+        if was_empty {
+            for page in self.pages() {
+                Self::wire_page_close(&page, self.page_close_handlers.clone()).await;
+            }
+        }
+        Ok(())
+    }
+
+    // --- Forwarders: wire a single page's events to the context handler vecs. ---
+    // Each (page, event) is wired exactly once: on the first context handler
+    // (current pages) or at page creation (future pages, see the "page" event
+    // dispatch). The vec is cloned out under the lock before awaiting handlers.
+
+    async fn wire_download(page: &Page, handlers: Arc<Mutex<Vec<DownloadHandler>>>) {
+        let _ = page
+            .on_download(move |d: Download| {
+                let handlers = handlers.clone();
+                async move {
+                    let hs = handlers.lock().unwrap().clone();
+                    for h in hs {
+                        let _ = h(d.clone()).await;
+                    }
+                    Ok(())
+                }
+            })
+            .await;
+    }
+
+    async fn wire_frame_attached(page: &Page, handlers: Arc<Mutex<Vec<CtxFrameHandler>>>) {
+        let _ = page
+            .on_frameattached(move |f: Frame| {
+                let handlers = handlers.clone();
+                async move {
+                    let hs = handlers.lock().unwrap().clone();
+                    for h in hs {
+                        let _ = h(f.clone()).await;
+                    }
+                    Ok(())
+                }
+            })
+            .await;
+    }
+
+    async fn wire_frame_detached(page: &Page, handlers: Arc<Mutex<Vec<CtxFrameHandler>>>) {
+        let _ = page
+            .on_framedetached(move |f: Frame| {
+                let handlers = handlers.clone();
+                async move {
+                    let hs = handlers.lock().unwrap().clone();
+                    for h in hs {
+                        let _ = h(f.clone()).await;
+                    }
+                    Ok(())
+                }
+            })
+            .await;
+    }
+
+    async fn wire_frame_navigated(page: &Page, handlers: Arc<Mutex<Vec<CtxFrameHandler>>>) {
+        let _ = page
+            .on_framenavigated(move |f: Frame| {
+                let handlers = handlers.clone();
+                async move {
+                    let hs = handlers.lock().unwrap().clone();
+                    for h in hs {
+                        let _ = h(f.clone()).await;
+                    }
+                    Ok(())
+                }
+            })
+            .await;
+    }
+
+    async fn wire_page_load(page: &Page, handlers: Arc<Mutex<Vec<PageEventHandler>>>) {
+        let p = page.clone();
+        let _ = page
+            .on_load(move || {
+                let handlers = handlers.clone();
+                let p = p.clone();
+                async move {
+                    let hs = handlers.lock().unwrap().clone();
+                    for h in hs {
+                        let _ = h(p.clone()).await;
+                    }
+                    Ok(())
+                }
+            })
+            .await;
+    }
+
+    async fn wire_page_close(page: &Page, handlers: Arc<Mutex<Vec<PageEventHandler>>>) {
+        let p = page.clone();
+        let _ = page
+            .on_close(move || {
+                let handlers = handlers.clone();
+                let p = p.clone();
+                async move {
+                    let hs = handlers.lock().unwrap().clone();
+                    for h in hs {
+                        let _ = h(p.clone()).await;
+                    }
+                    Ok(())
+                }
+            })
+            .await;
+    }
+
     /// Adds a listener for the `close` event.
     ///
     /// The handler is called when the browser context is closed.
@@ -1619,11 +1874,18 @@ impl BrowserContext {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # use playwright_rs::Playwright;
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let pw = Playwright::launch().await?;
+    /// # let browser = pw.chromium().launch().await?;
+    /// # let context = browser.new_context().await?;
     /// // Set up the waiter BEFORE the triggering action
     /// let waiter = context.expect_page(None).await?;
     /// let _page = context.new_page().await?;
     /// let new_page = waiter.wait().await?;
+    /// # Ok(())
+    /// # }
     /// ```
     ///
     /// See: <https://playwright.dev/docs/api/class-browsercontext#browser-context-wait-for-event>
@@ -1650,11 +1912,18 @@ impl BrowserContext {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # use playwright_rs::Playwright;
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let pw = Playwright::launch().await?;
+    /// # let browser = pw.chromium().launch().await?;
+    /// # let context = browser.new_context().await?;
     /// // Set up the waiter BEFORE closing
     /// let waiter = context.expect_close(None).await?;
     /// context.close().await?;
     /// waiter.wait().await?;
+    /// # Ok(())
+    /// # }
     /// ```
     ///
     /// See: <https://playwright.dev/docs/api/class-browsercontext#browser-context-wait-for-event>
@@ -2192,6 +2461,12 @@ impl ChannelOwner for BrowserContext {
                     let pages = self.pages.clone();
                     let page_handlers = self.page_handlers.clone();
                     let page_waiters = self.page_waiters.clone();
+                    let download_handlers = self.download_handlers.clone();
+                    let frame_attached_handlers = self.frame_attached_handlers.clone();
+                    let frame_detached_handlers = self.frame_detached_handlers.clone();
+                    let frame_navigated_handlers = self.frame_navigated_handlers.clone();
+                    let page_load_handlers = self.page_load_handlers.clone();
+                    let page_close_handlers = self.page_close_handlers.clone();
 
                     tokio::spawn(async move {
                         // Get and downcast the Page object
@@ -2203,6 +2478,28 @@ impl ChannelOwner for BrowserContext {
 
                         // Track the page
                         pages.lock().unwrap().push(page.clone());
+
+                        // Forward this new page's lifecycle events to any
+                        // context-level handlers already registered.
+                        if !download_handlers.lock().unwrap().is_empty() {
+                            Self::wire_download(&page, download_handlers.clone()).await;
+                        }
+                        if !frame_attached_handlers.lock().unwrap().is_empty() {
+                            Self::wire_frame_attached(&page, frame_attached_handlers.clone()).await;
+                        }
+                        if !frame_detached_handlers.lock().unwrap().is_empty() {
+                            Self::wire_frame_detached(&page, frame_detached_handlers.clone()).await;
+                        }
+                        if !frame_navigated_handlers.lock().unwrap().is_empty() {
+                            Self::wire_frame_navigated(&page, frame_navigated_handlers.clone())
+                                .await;
+                        }
+                        if !page_load_handlers.lock().unwrap().is_empty() {
+                            Self::wire_page_load(&page, page_load_handlers.clone()).await;
+                        }
+                        if !page_close_handlers.lock().unwrap().is_empty() {
+                            Self::wire_page_close(&page, page_close_handlers.clone()).await;
+                        }
 
                         // If this page has an opener, dispatch popup event to opener's handlers.
                         // The opener guid is in the page's initializer: {"opener": {"guid": "..."}}
@@ -2254,6 +2551,19 @@ impl ChannelOwner for BrowserContext {
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
 
+                let location =
+                    params
+                        .get("location")
+                        .map(|loc| crate::protocol::WebErrorLocation {
+                            url: loc
+                                .get("url")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                            line: loc.get("line").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
+                            column: loc.get("column").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
+                        });
+
                 let connection = self.connection();
                 let weberror_handlers = self.weberror_handlers.clone();
                 let weberror_waiters = self.weberror_waiters.clone();
@@ -2267,7 +2577,11 @@ impl ChannelOwner for BrowserContext {
                     };
 
                     // 1. Dispatch to context-level weberror handlers
-                    let web_error = crate::protocol::WebError::new(message.clone(), page.clone());
+                    let web_error = crate::protocol::WebError::new(
+                        message.clone(),
+                        page.clone(),
+                        location.clone(),
+                    );
                     let handlers = weberror_handlers.lock().unwrap().clone();
                     for handler in handlers {
                         if let Err(e) = handler(web_error.clone()).await {
@@ -2449,14 +2763,17 @@ impl ChannelOwner for BrowserContext {
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
+                // 1.60 emits `line`/`column`; older drivers used
+                // `lineNumber`/`columnNumber` (deprecated, may be removed). Prefer
+                // the new keys, fall back to the legacy ones.
                 let loc_line = params
                     .get("location")
-                    .and_then(|v| v.get("lineNumber"))
+                    .and_then(|v| v.get("line").or_else(|| v.get("lineNumber")))
                     .and_then(|v| v.as_i64())
                     .unwrap_or(0) as i32;
                 let loc_col = params
                     .get("location")
-                    .and_then(|v| v.get("columnNumber"))
+                    .and_then(|v| v.get("column").or_else(|| v.get("columnNumber")))
                     .and_then(|v| v.as_i64())
                     .unwrap_or(0) as i32;
                 let page_guid_owned = params
@@ -2684,6 +3001,7 @@ pub struct Geolocation {
 /// See: <https://playwright.dev/docs/api/class-browser#browser-new-context-option-storage-state>
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Cookie {
     /// Cookie name
     pub name: String,
@@ -2704,10 +3022,58 @@ pub struct Cookie {
     pub same_site: Option<String>,
 }
 
+impl Cookie {
+    /// Create a session cookie (no expiry) with the given name and value.
+    /// Set `domain`+`path` (or serve it for a URL) before adding it.
+    pub fn new(name: impl Into<String>, value: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            value: value.into(),
+            domain: String::new(),
+            path: "/".to_string(),
+            expires: -1.0,
+            http_only: false,
+            secure: false,
+            same_site: None,
+        }
+    }
+    /// Cookie domain (e.g. "example.com").
+    pub fn domain(mut self, domain: impl Into<String>) -> Self {
+        self.domain = domain.into();
+        self
+    }
+    /// Cookie path.
+    pub fn path(mut self, path: impl Into<String>) -> Self {
+        self.path = path.into();
+        self
+    }
+    /// Expiry as Unix time in seconds (-1 for a session cookie).
+    pub fn expires(mut self, expires: f64) -> Self {
+        self.expires = expires;
+        self
+    }
+    /// Mark the cookie HttpOnly.
+    pub fn http_only(mut self, http_only: bool) -> Self {
+        self.http_only = http_only;
+        self
+    }
+    /// Mark the cookie Secure.
+    pub fn secure(mut self, secure: bool) -> Self {
+        self.secure = secure;
+        self
+    }
+    /// SameSite attribute ("Strict", "Lax", or "None").
+    pub fn same_site(mut self, same_site: impl Into<String>) -> Self {
+        self.same_site = Some(same_site.into());
+        self
+    }
+}
+
 /// Local storage item for storage state.
 ///
 /// See: <https://playwright.dev/docs/api/class-browser#browser-new-context-option-storage-state>
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct LocalStorageItem {
     /// Storage key
     pub name: String,
@@ -2715,16 +3081,37 @@ pub struct LocalStorageItem {
     pub value: String,
 }
 
+impl LocalStorageItem {
+    /// A single localStorage key/value pair.
+    pub fn new(name: impl Into<String>, value: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            value: value.into(),
+        }
+    }
+}
+
 /// Origin with local storage items for storage state.
 ///
 /// See: <https://playwright.dev/docs/api/class-browser#browser-new-context-option-storage-state>
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Origin {
     /// Origin URL (e.g., `https://example.com`)
     pub origin: String,
     /// Local storage items for this origin
     pub local_storage: Vec<LocalStorageItem>,
+}
+
+impl Origin {
+    /// Storage entries for one origin.
+    pub fn new(origin: impl Into<String>, local_storage: Vec<LocalStorageItem>) -> Self {
+        Self {
+            origin: origin.into(),
+            local_storage,
+        }
+    }
 }
 
 /// Storage state containing cookies and local storage.
@@ -2733,12 +3120,26 @@ pub struct Origin {
 /// enabling session persistence across context instances.
 ///
 /// See: <https://playwright.dev/docs/api/class-browser#browser-new-context-option-storage-state>
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct StorageState {
     /// List of cookies
     pub cookies: Vec<Cookie>,
     /// List of origins with local storage
     pub origins: Vec<Origin>,
+}
+
+impl StorageState {
+    /// Cookies to seed the context with.
+    pub fn cookies(mut self, cookies: Vec<Cookie>) -> Self {
+        self.cookies = cookies;
+        self
+    }
+    /// Per-origin storage (localStorage) to seed the context with.
+    pub fn origins(mut self, origins: Vec<Origin>) -> Self {
+        self.origins = origins;
+        self
+    }
 }
 
 /// Options for filtering which cookies to clear with `BrowserContext::clear_cookies()`.
@@ -2748,6 +3149,7 @@ pub struct StorageState {
 /// See: <https://playwright.dev/docs/api/class-browsercontext#browser-context-clear-cookies>
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct ClearCookiesOptions {
     /// Filter by cookie name (exact match).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2760,10 +3162,29 @@ pub struct ClearCookiesOptions {
     pub path: Option<String>,
 }
 
+impl ClearCookiesOptions {
+    /// Only clear cookies with this name.
+    pub fn name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+    /// Only clear cookies for this domain.
+    pub fn domain(mut self, domain: impl Into<String>) -> Self {
+        self.domain = Some(domain.into());
+        self
+    }
+    /// Only clear cookies for this path.
+    pub fn path(mut self, path: impl Into<String>) -> Self {
+        self.path = Some(path.into());
+        self
+    }
+}
+
 /// Options for `BrowserContext::grant_permissions()`.
 ///
 /// See: <https://playwright.dev/docs/api/class-browsercontext#browser-context-grant-permissions>
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct GrantPermissionsOptions {
     /// Optional origin to restrict the permission grant to.
     ///
@@ -2771,11 +3192,20 @@ pub struct GrantPermissionsOptions {
     pub origin: Option<String>,
 }
 
+impl GrantPermissionsOptions {
+    /// Restrict the grant to the given origin.
+    pub fn origin(mut self, origin: impl Into<String>) -> Self {
+        self.origin = Some(origin.into());
+        self
+    }
+}
+
 /// Options for recording HAR.
 ///
 /// See: <https://playwright.dev/docs/api/class-browser#browser-new-context-option-record-har>
 #[derive(Debug, Clone, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct RecordHar {
     /// Path on the filesystem to write the HAR file to.
     pub path: String,
@@ -2794,10 +3224,44 @@ pub struct RecordHar {
     pub url_filter: Option<String>,
 }
 
+impl RecordHar {
+    /// Record a HAR to the given path.
+    pub fn new(path: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            omit_content: None,
+            content: None,
+            mode: None,
+            url_filter: None,
+        }
+    }
+    /// Omit response bodies from the HAR.
+    pub fn omit_content(mut self, omit_content: bool) -> Self {
+        self.omit_content = Some(omit_content);
+        self
+    }
+    /// Content mode ("embed", "attach", or "omit").
+    pub fn content(mut self, content: impl Into<String>) -> Self {
+        self.content = Some(content.into());
+        self
+    }
+    /// Recording mode ("full" or "minimal").
+    pub fn mode(mut self, mode: impl Into<String>) -> Self {
+        self.mode = Some(mode.into());
+        self
+    }
+    /// Only record requests matching this URL glob.
+    pub fn url_filter(mut self, url_filter: impl Into<String>) -> Self {
+        self.url_filter = Some(url_filter.into());
+        self
+    }
+}
+
 /// Options for recording video.
 ///
 /// See: <https://playwright.dev/docs/api/class-browser#browser-new-context-option-record-video>
 #[derive(Debug, Clone, Serialize, Default)]
+#[non_exhaustive]
 pub struct RecordVideo {
     /// Path to the directory to put videos into.
     pub dir: String,
@@ -2806,12 +3270,28 @@ pub struct RecordVideo {
     pub size: Option<Viewport>,
 }
 
+impl RecordVideo {
+    /// Record videos into the given directory.
+    pub fn new(dir: impl Into<String>) -> Self {
+        Self {
+            dir: dir.into(),
+            size: None,
+        }
+    }
+    /// Recorded video size.
+    pub fn size(mut self, size: Viewport) -> Self {
+        self.size = Some(size);
+        self
+    }
+}
+
 /// Options for creating a new browser context.
 ///
 /// Controls how downloads are handled in a [`BrowserContext`].
 ///
 /// See the `accept_downloads` field of [`BrowserContextOptions`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
 pub enum AcceptDownloads {
     /// Allow and capture downloads via the `download` event.
     #[serde(rename = "accept")]
@@ -2836,6 +3316,7 @@ impl From<bool> for AcceptDownloads {
 /// See: <https://playwright.dev/docs/api/class-browser#browser-new-context>
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct BrowserContextOptions {
     /// Sets consistent viewport for all pages in the context.
     /// Set to null via `no_viewport(true)` to disable viewport emulation.
@@ -3113,16 +3594,16 @@ impl BrowserContextOptionsBuilder {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```no_run
     /// use playwright_rs::protocol::{BrowserContextOptions, ProxySettings};
     ///
     /// let options = BrowserContextOptions::builder()
-    ///     .proxy(ProxySettings {
-    ///         server: "http://proxy.example.com:8080".to_string(),
-    ///         bypass: Some(".example.com".to_string()),
-    ///         username: Some("user".to_string()),
-    ///         password: Some("pass".to_string()),
-    ///     })
+    ///     .proxy(
+    ///         ProxySettings::new("http://proxy.example.com:8080")
+    ///             .bypass(".example.com")
+    ///             .username("user")
+    ///             .password("pass"),
+    ///     )
     ///     .build();
     /// ```
     ///
@@ -3212,25 +3693,18 @@ impl BrowserContextOptionsBuilder {
     /// ```rust
     /// use playwright_rs::protocol::{BrowserContextOptions, Cookie, StorageState, Origin, LocalStorageItem};
     ///
-    /// let storage_state = StorageState {
-    ///     cookies: vec![Cookie {
-    ///         name: "session_id".to_string(),
-    ///         value: "abc123".to_string(),
-    ///         domain: ".example.com".to_string(),
-    ///         path: "/".to_string(),
-    ///         expires: -1.0,
-    ///         http_only: true,
-    ///         secure: true,
-    ///         same_site: Some("Lax".to_string()),
-    ///     }],
-    ///     origins: vec![Origin {
-    ///         origin: "https://example.com".to_string(),
-    ///         local_storage: vec![LocalStorageItem {
-    ///             name: "user_prefs".to_string(),
-    ///             value: "{\"theme\":\"dark\"}".to_string(),
-    ///         }],
-    ///     }],
-    /// };
+    /// let storage_state = StorageState::default()
+    ///     .cookies(vec![
+    ///         Cookie::new("session_id", "abc123")
+    ///             .domain(".example.com")
+    ///             .http_only(true)
+    ///             .secure(true)
+    ///             .same_site("Lax"),
+    ///     ])
+    ///     .origins(vec![Origin::new(
+    ///         "https://example.com",
+    ///         vec![LocalStorageItem::new("user_prefs", "{\"theme\":\"dark\"}")],
+    ///     )]);
     ///
     /// let options = BrowserContextOptions::builder()
     ///     .storage_state(storage_state)

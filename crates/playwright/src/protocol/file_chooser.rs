@@ -27,7 +27,7 @@ use std::sync::Arc;
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use playwright_rs::protocol::Playwright;
 /// use std::path::PathBuf;
 ///
@@ -126,12 +126,19 @@ impl FileChooser {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # use playwright_rs::Playwright;
     /// # use std::path::PathBuf;
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let pw = Playwright::launch().await?;
+    /// # let browser = pw.chromium().launch().await?;
+    /// # let page = browser.new_page().await?;
     /// let waiter = page.expect_file_chooser(None).await?;
     /// page.locator("input[type=file]").await.click(None).await?;
     /// let chooser = waiter.wait().await?;
     /// chooser.set_files(&[PathBuf::from("/tmp/upload.txt")]).await?;
+    /// # Ok(())
+    /// # }
     /// ```
     ///
     /// See: <https://playwright.dev/docs/api/class-filechooser#file-chooser-set-files>

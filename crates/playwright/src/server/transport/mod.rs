@@ -12,6 +12,14 @@ use std::pin::Pin;
 pub mod pipe;
 pub mod websocket;
 
+/// Capacity of the transport-to-dispatch message channel.
+///
+/// Bounded so a dispatch loop that falls behind exerts backpressure on the
+/// driver (via the pipe/socket) instead of buffering messages without limit.
+/// Sized for bursts (e.g. route interception storms) while keeping the
+/// worst-case buffer small.
+pub(crate) const MESSAGE_CHANNEL_CAPACITY: usize = 256;
+
 pub use pipe::{PipeTransport, PipeTransportReceiver, send_message};
 pub use websocket::WebSocketTransport;
 

@@ -13,7 +13,7 @@ use url::Url;
 
 /// WebSocket transport for remote browser connections
 pub struct WebSocketTransport {
-    message_tx: mpsc::UnboundedSender<JsonValue>,
+    message_tx: mpsc::Sender<JsonValue>,
 
     // Let's store the sender half of the split stream
     sender: futures_util::stream::SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, WsMessage>,
@@ -24,15 +24,15 @@ pub struct WebSocketTransport {
 
 pub struct WebSocketTransportReceiver {
     receiver: futures_util::stream::SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
-    message_tx: mpsc::UnboundedSender<JsonValue>,
+    message_tx: mpsc::Sender<JsonValue>,
 }
 
 impl WebSocketTransport {
     pub async fn connect(
         url: &str,
         headers: Option<HashMap<String, String>>,
-    ) -> Result<(Self, mpsc::UnboundedReceiver<JsonValue>)> {
-        let (message_tx, message_rx) = mpsc::unbounded_channel();
+    ) -> Result<(Self, mpsc::Receiver<JsonValue>)> {
+        let (message_tx, message_rx) = mpsc::channel(super::MESSAGE_CHANNEL_CAPACITY);
 
         // Parse URL to ensure validity
         let _parsed_url =
@@ -121,34 +121,24 @@ impl TransportReceiver for WebSocketTransportReceiver {
     fn run(&mut self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
         Box::pin(async move {
             while let Some(msg_result) = self.receiver.next().await {
-                match msg_result {
-                    Ok(msg) => {
-                        match msg {
-                            WsMessage::Text(text) => {
-                                let message: JsonValue =
-                                    serde_json::from_str(&text).map_err(|e| {
-                                        Error::ProtocolError(format!("Failed to parse JSON: {}", e))
-                                    })?;
-
-                                if self.message_tx.send(message).is_err() {
-                                    break;
-                                }
-                            }
-                            WsMessage::Binary(_) => {
-                                // Playwright usually uses Text for JSON RPC
-                                // But might use binary for Buffer transfer?
-                                // For now ignore or log
-                            }
-                            WsMessage::Close(_) => break,
-                            _ => {}
+                let msg = msg_result
+                    .map_err(|e| Error::TransportError(format!("WebSocket read error: {}", e)))?;
+                match msg {
+                    WsMessage::Text(text) => {
+                        let message: JsonValue = serde_json::from_str(&text).map_err(|e| {
+                            Error::ProtocolError(format!("Failed to parse JSON: {}", e))
+                        })?;
+                        // Bounded send: a slow dispatch loop backpressures the
+                        // socket instead of buffering unboundedly.
+                        if self.message_tx.send(message).await.is_err() {
+                            break; // dispatch side gone; stop reading
                         }
                     }
-                    Err(e) => {
-                        return Err(Error::TransportError(format!(
-                            "WebSocket read error: {}",
-                            e
-                        )));
-                    }
+                    // Playwright's JSON-RPC uses Text frames; Binary is unused.
+                    WsMessage::Binary(_) => {}
+                    WsMessage::Close(_) => break,
+                    // Ping/Pong are answered by tungstenite itself.
+                    _ => {}
                 }
             }
             Ok(())

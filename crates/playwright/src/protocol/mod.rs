@@ -31,6 +31,7 @@ pub mod device;
 pub mod dialog;
 pub mod download;
 pub mod drag_to;
+pub mod drop_options;
 pub mod electron;
 pub mod element_handle;
 pub mod evaluate_conversion;
@@ -40,6 +41,8 @@ pub mod file_chooser;
 pub mod file_payload;
 pub mod frame;
 pub mod frame_locator;
+pub mod glob;
+pub mod har_options;
 pub mod js_handle;
 pub mod keyboard;
 pub mod local_utils;
@@ -98,19 +101,23 @@ pub use device::{DeviceDescriptor, DeviceViewport};
 pub use dialog::Dialog;
 pub use download::Download;
 pub use drag_to::{DragToOptions, DragToOptionsBuilder};
+pub use drop_options::{DropOptions, DropOptionsBuilder};
 pub use electron::Electron;
 pub use element_handle::ElementHandle;
 pub use evaluate_conversion::{parse_result, parse_value, serialize_argument, serialize_null};
 pub use event_value::EventValue;
 pub use event_waiter::EventWaiter;
 pub use file_chooser::FileChooser;
-pub use file_payload::{FilePayload, FilePayloadBuilder};
+pub use file_payload::FilePayload;
 pub use frame::Frame;
 pub use frame_locator::FrameLocator;
+pub use har_options::{HarContent, HarMode, StartHarOptions};
 pub use js_handle::JSHandle;
 pub use keyboard::Keyboard;
 pub use local_utils::LocalUtils;
-pub use locator::{AriaRole, BoundingBox, FilterOptions, GetByRoleOptions, Locator};
+pub use locator::{
+    AriaRole, BoundingBox, FilterOptions, GetByRoleOptions, HighlightOptions, Locator,
+};
 pub use mouse::Mouse;
 pub use page::{
     AddLocatorHandlerOptions, AddScriptTagOptions, AddScriptTagOptionsBuilder, AddStyleTagOptions,
@@ -131,7 +138,7 @@ pub use screencast::{
     ActionPosition, ChapterOptions, OverlayId, Screencast, ScreencastFrame, ScreencastSize,
     ScreencastStartOptions, ShowActionsOptions, ShowOverlayOptions,
 };
-pub use screenshot::{ScreenshotClip, ScreenshotOptions, ScreenshotType};
+pub use screenshot::{Animations, Caret, Scale, ScreenshotClip, ScreenshotOptions, ScreenshotType};
 pub use select_option::SelectOption;
 pub use selectors::Selectors;
 pub use tap::{TapOptions, TapOptionsBuilder};
@@ -139,7 +146,7 @@ pub use touchscreen::Touchscreen;
 pub use tracing::{Tracing, TracingStartOptions, TracingStopOptions};
 pub use video::Video;
 pub use wait_for::{WaitForOptions, WaitForOptionsBuilder, WaitForState};
-pub use web_error::WebError;
+pub use web_error::{WebError, WebErrorLocation};
 pub use web_socket::WebSocket;
 pub use web_socket_route::{WebSocketRoute, WebSocketRouteCloseOptions};
 pub use worker::Worker;

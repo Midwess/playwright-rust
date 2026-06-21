@@ -138,7 +138,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-playwright-rs = "0.13"  # Auto-updates to latest 0.13.x
+playwright-rs = "0.14"  # Auto-updates to latest 0.14.x
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -238,7 +238,7 @@ This project uses [cargo-nextest](https://nexte.st/). Install once: `cargo insta
 cargo nextest run                                    # All tests
 cargo nextest run -p playwright-rs --lib             # Unit tests only (~2s, no browsers)
 cargo nextest run -p playwright-rs -E 'test(locator)' # Pattern match
-cargo test --doc --workspace -- --ignored            # Doc-tests (requires browsers)
+cargo test --doc --workspace                         # Doc-tests (compile-checked)
 ```
 
 ### Running Examples
@@ -278,8 +278,8 @@ unconditionally and pass the trace path only on failure:
 
 ```rust,ignore
 let result = run_test_body(&context).await;
-let trace_path = result.is_err().then(|| "trace.zip".to_string());
-let _ = tracing.stop(Some(TracingStopOptions { path: trace_path })).await;
+let stop_opts = result.is_err().then(|| TracingStopOptions::default().path("trace.zip"));
+let _ = tracing.stop(stop_opts).await;
 let _ = browser.close().await;
 result?;
 ```

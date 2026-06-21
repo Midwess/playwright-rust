@@ -366,3 +366,63 @@ async fn test_screenshot_options_webkit() {
     browser.close().await.expect("Failed to close browser");
     server.shutdown();
 }
+
+#[tokio::test]
+async fn test_screenshot_new_options_accepted() {
+    use playwright_rs::protocol::screenshot::{Animations, Caret, Scale};
+
+    let server = TestServer::start().await;
+    let (_pw, browser, page) = crate::common::setup().await;
+
+    page.goto(&format!("{}/locators.html", server.url()), None)
+        .await
+        .expect("Failed to navigate");
+
+    // Exercise the options added for parity: animations, caret, scale, style.
+    // The driver rejects unknown params, so a successful capture confirms the
+    // protocol param names are correct.
+    let options = ScreenshotOptions::builder()
+        .animations(Animations::Disabled)
+        .caret(Caret::Hide)
+        .scale(Scale::Css)
+        .style("* { animation: none !important; }")
+        .build();
+    let bytes = page
+        .screenshot(Some(options))
+        .await
+        .expect("screenshot with animations/caret/scale/style options");
+
+    assert!(!bytes.is_empty());
+    assert_eq!(&bytes[0..4], &[0x89, 0x50, 0x4E, 0x47]); // PNG magic bytes
+
+    browser.close().await.expect("Failed to close browser");
+    server.shutdown();
+}
+
+#[tokio::test]
+async fn test_screenshot_mask_accepted() {
+    let server = TestServer::start().await;
+    let (_pw, browser, page) = crate::common::setup().await;
+
+    page.goto(&format!("{}/locators.html", server.url()), None)
+        .await
+        .expect("Failed to navigate");
+
+    // Mask locators serialize to `{ frame, selector }` channel refs; a
+    // successful capture confirms that shape (and maskColor) is accepted.
+    let masked = page.locator("h1").await;
+    let options = ScreenshotOptions::builder()
+        .mask(vec![masked])
+        .mask_color("#FF00FF")
+        .build();
+    let bytes = page
+        .screenshot(Some(options))
+        .await
+        .expect("screenshot with mask + mask_color");
+
+    assert!(!bytes.is_empty());
+    assert_eq!(&bytes[0..4], &[0x89, 0x50, 0x4E, 0x47]); // PNG magic bytes
+
+    browser.close().await.expect("Failed to close browser");
+    server.shutdown();
+}

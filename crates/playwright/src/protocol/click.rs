@@ -8,13 +8,14 @@ use serde::Serialize;
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use playwright_rs::protocol::click::MouseButton;
 ///
 /// let button = MouseButton::Right;
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum MouseButton {
     /// Left mouse button (default)
     Left,
@@ -28,12 +29,13 @@ pub enum MouseButton {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use playwright_rs::protocol::click::KeyboardModifier;
 ///
 /// let modifiers = vec![KeyboardModifier::Shift, KeyboardModifier::Control];
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
 pub enum KeyboardModifier {
     /// Alt key
     Alt,
@@ -53,7 +55,7 @@ pub enum KeyboardModifier {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use playwright_rs::protocol::click::Position;
 ///
 /// let position = Position { x: 10.0, y: 20.0 };
@@ -74,7 +76,7 @@ pub struct Position {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use playwright_rs::protocol::click::{ClickOptions, MouseButton, KeyboardModifier, Position};
 ///
 /// // Right-click with modifiers
@@ -96,6 +98,7 @@ pub struct Position {
 ///
 /// See: <https://playwright.dev/docs/api/class-locator#locator-click>
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct ClickOptions {
     /// Mouse button to click (left, right, middle)
     pub button: Option<MouseButton>,

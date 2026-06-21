@@ -365,11 +365,7 @@ async fn test_get_by_role() {
     let submit = page
         .get_by_role(
             AriaRole::Button,
-            Some(GetByRoleOptions {
-                name: Some("Submit".into()),
-                exact: Some(true),
-                ..Default::default()
-            }),
+            Some(GetByRoleOptions::default().name("Submit").exact(true)),
         )
         .await;
     let count = submit.count().await.expect("Failed to count submit");
@@ -379,10 +375,7 @@ async fn test_get_by_role() {
     let submit_buttons = page
         .get_by_role(
             AriaRole::Button,
-            Some(GetByRoleOptions {
-                name: Some("Submit".into()),
-                ..Default::default()
-            }),
+            Some(GetByRoleOptions::default().name("Submit")),
         )
         .await;
     let count = submit_buttons
@@ -399,10 +392,7 @@ async fn test_get_by_role() {
     let h2 = page
         .get_by_role(
             AriaRole::Heading,
-            Some(GetByRoleOptions {
-                level: Some(2),
-                ..Default::default()
-            }),
+            Some(GetByRoleOptions::default().level(2)),
         )
         .await;
     let count = h2.count().await.expect("Failed to count h2");
@@ -414,10 +404,7 @@ async fn test_get_by_role() {
     let checked = page
         .get_by_role(
             AriaRole::Checkbox,
-            Some(GetByRoleOptions {
-                checked: Some(true),
-                ..Default::default()
-            }),
+            Some(GetByRoleOptions::default().checked(true)),
         )
         .await;
     let count = checked.count().await.expect("Failed to count checked");
@@ -427,10 +414,7 @@ async fn test_get_by_role() {
     let unchecked = page
         .get_by_role(
             AriaRole::Checkbox,
-            Some(GetByRoleOptions {
-                checked: Some(false),
-                ..Default::default()
-            }),
+            Some(GetByRoleOptions::default().checked(false)),
         )
         .await;
     let count = unchecked.count().await.expect("Failed to count unchecked");
@@ -440,10 +424,7 @@ async fn test_get_by_role() {
     let disabled = page
         .get_by_role(
             AriaRole::Button,
-            Some(GetByRoleOptions {
-                disabled: Some(true),
-                ..Default::default()
-            }),
+            Some(GetByRoleOptions::default().disabled(true)),
         )
         .await;
     let count = disabled.count().await.expect("Failed to count disabled");
@@ -472,10 +453,7 @@ async fn test_get_by_role() {
     let submit_ci = page
         .get_by_role(
             AriaRole::Button,
-            Some(GetByRoleOptions {
-                name: Some("submit".into()),
-                ..Default::default()
-            }),
+            Some(GetByRoleOptions::default().name("submit")),
         )
         .await;
     let count = submit_ci.count().await.expect("Failed to count ci");
@@ -598,10 +576,7 @@ async fn test_locator_filter_has_text() {
 
     // filter with has_text should narrow rows to only those containing "Apple"
     let rows = page.locator("tr").await;
-    let apple_rows = rows.filter(FilterOptions {
-        has_text: Some("Apple".to_string()),
-        ..Default::default()
-    });
+    let apple_rows = rows.filter(FilterOptions::default().has_text("Apple"));
     let count = apple_rows.count().await.expect("Failed to count");
     assert_eq!(count, 1, "Should find 1 row containing 'Apple'");
 
@@ -633,10 +608,7 @@ async fn test_locator_filter_has_not_text() {
     // filter with has_not_text should exclude rows containing "Apple"
     // The table has 3 data rows: Apple, Banana, Cherry
     let rows = page.locator("tr.data-row").await;
-    let non_apple_rows = rows.filter(FilterOptions {
-        has_not_text: Some("Apple".to_string()),
-        ..Default::default()
-    });
+    let non_apple_rows = rows.filter(FilterOptions::default().has_not_text("Apple"));
     let count = non_apple_rows.count().await.expect("Failed to count");
     assert_eq!(count, 2, "Should find 2 rows not containing 'Apple'");
 
@@ -658,10 +630,7 @@ async fn test_locator_filter_has_child_locator() {
     // filter with has should narrow to rows containing a button
     let rows = page.locator("tr.data-row").await;
     let button_child = page.locator("button.action-btn").await;
-    let rows_with_button = rows.filter(FilterOptions {
-        has: Some(button_child),
-        ..Default::default()
-    });
+    let rows_with_button = rows.filter(FilterOptions::default().has(button_child));
     let count = rows_with_button.count().await.expect("Failed to count");
     assert_eq!(count, 2, "Should find 2 rows containing a button");
 
@@ -683,10 +652,7 @@ async fn test_locator_filter_has_not_child_locator() {
     // filter with has_not should narrow to rows that do NOT contain a button
     let rows = page.locator("tr.data-row").await;
     let button_child = page.locator("button.action-btn").await;
-    let rows_without_button = rows.filter(FilterOptions {
-        has_not: Some(button_child),
-        ..Default::default()
-    });
+    let rows_without_button = rows.filter(FilterOptions::default().has_not(button_child));
     let count = rows_without_button.count().await.expect("Failed to count");
     assert_eq!(count, 1, "Should find 1 row without a button");
 
@@ -762,14 +728,8 @@ async fn test_locator_filter_chain() {
 
     // Get rows that contain "Banana" AND also have an action button
     let filtered = rows
-        .filter(FilterOptions {
-            has_text: Some("Banana".to_string()),
-            ..Default::default()
-        })
-        .filter(FilterOptions {
-            has: Some(button_child),
-            ..Default::default()
-        });
+        .filter(FilterOptions::default().has_text("Banana"))
+        .filter(FilterOptions::default().has(button_child));
 
     let count = filtered.count().await.expect("Failed to count");
     assert_eq!(
@@ -794,12 +754,7 @@ async fn test_locator_filter_selector_composition() {
     // Note: We can't construct a Locator directly (new() is pub(crate)),
     // so we skip pure unit-test of selectors and rely on integration tests.
     // This placeholder ensures the type compiles.
-    let _opts = FilterOptions {
-        has_text: Some("foo".to_string()),
-        has_not_text: None,
-        has: None,
-        has_not: None,
-    };
+    let _opts = FilterOptions::default().has_text("foo");
     assert!(_opts.has_text.is_some());
     assert!(_opts.has_not_text.is_none());
 }
@@ -973,7 +928,7 @@ async fn test_locator_press_sequentially_with_delay() {
     use playwright_rs::PressSequentiallyOptions;
 
     // press_sequentially() with delay option should also work
-    let options = PressSequentiallyOptions { delay: Some(10.0) };
+    let options = PressSequentiallyOptions::builder().delay(10.0).build();
     input
         .press_sequentially("abc", Some(options))
         .await
@@ -1303,10 +1258,11 @@ async fn test_locator_tap() {
 
     // tap() requires a touch-enabled context
     let context = browser
-        .new_context_with_options(playwright_rs::protocol::BrowserContextOptions {
-            has_touch: Some(true),
-            ..Default::default()
-        })
+        .new_context_with_options(
+            playwright_rs::protocol::BrowserContextOptions::builder()
+                .has_touch(true)
+                .build(),
+        )
         .await
         .expect("Failed to create context with touch");
 
@@ -1351,10 +1307,11 @@ async fn test_locator_tap_with_options() {
         .expect("Failed to launch browser");
 
     let context = browser
-        .new_context_with_options(playwright_rs::protocol::BrowserContextOptions {
-            has_touch: Some(true),
-            ..Default::default()
-        })
+        .new_context_with_options(
+            playwright_rs::protocol::BrowserContextOptions::builder()
+                .has_touch(true)
+                .build(),
+        )
         .await
         .expect("Failed to create context with touch");
 
@@ -1552,6 +1509,49 @@ async fn test_locator_drag_to() {
         result_text,
         Some("dropped".to_string()),
         "Drop should have been triggered"
+    );
+
+    browser.close().await.expect("Failed to close browser");
+    server.shutdown();
+}
+
+#[tokio::test]
+async fn test_locator_drop_data_and_file() {
+    use playwright_rs::{DropOptions, FilePayload};
+
+    let server = TestServer::start().await;
+    let (_pw, browser, page) = crate::common::setup().await;
+
+    page.goto(&format!("{}/external_drop.html", server.url()), None)
+        .await
+        .expect("Failed to navigate");
+
+    let zone = page.locator("#zone").await;
+    let result = page.locator("#result").await;
+
+    // Drop MIME-typed data; the zone reports what its DataTransfer received.
+    zone.drop(
+        DropOptions::builder()
+            .data("text/plain", "hello-drop")
+            .build(),
+    )
+    .await
+    .expect("drop data should succeed");
+    assert_eq!(
+        result.text_content().await.expect("result text"),
+        Some("text:hello-drop".to_string()),
+        "dropped data should reach the page's DataTransfer"
+    );
+
+    // Drop an in-memory file; the zone reports the dropped file name.
+    let file = FilePayload::new("note.txt", "text/plain", b"hi".to_vec());
+    zone.drop(DropOptions::builder().file(file).build())
+        .await
+        .expect("drop file should succeed");
+    assert_eq!(
+        result.text_content().await.expect("result text"),
+        Some("file:note.txt".to_string()),
+        "dropped file should reach the page's DataTransfer"
     );
 
     browser.close().await.expect("Failed to close browser");
@@ -1898,7 +1898,7 @@ async fn test_locator_highlight() {
 
     page.locator("h1")
         .await
-        .highlight()
+        .highlight(None)
         .await
         .expect("highlight should succeed");
 

@@ -211,7 +211,7 @@ impl Frame {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```no_run
     /// # use playwright_rs::protocol::Playwright;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -521,7 +521,7 @@ impl Frame {
         if let Some(response_ref) = goto_result.response {
             // The server returns a Response GUID, but the __create__ message might not have
             // arrived yet. Retry a few times to wait for the object to be created.
-            // TODO(Phase 4+): Implement proper GUID replacement like Python's _replace_guids_with_channels
+            // TODO: Implement proper GUID replacement like Python's _replace_guids_with_channels
             //   - Eliminates retry loop for better performance
             //   - See: playwright-python's _replace_guids_with_channels method
             let response_arc = {
@@ -733,7 +733,7 @@ impl Frame {
             let current_url = self.url();
 
             let matches = if is_glob {
-                glob_match(url, &current_url)
+                crate::protocol::glob::glob_match(url, &current_url)
             } else {
                 current_url == url
             };
@@ -1448,6 +1448,29 @@ impl Frame {
         self.channel().send_no_result("dragAndDrop", params).await
     }
 
+    /// Drops files and/or data onto the element matched by `selector`.
+    ///
+    /// See: <https://playwright.dev/docs/api/class-locator#locator-drop>
+    pub(crate) async fn locator_drop(
+        &self,
+        selector: &str,
+        options: crate::protocol::DropOptions,
+    ) -> Result<()> {
+        let mut params = serde_json::json!({
+            "selector": selector,
+            "strict": true,
+        });
+
+        let opts_json = options.to_json();
+        if let Some(obj) = params.as_object_mut()
+            && let Some(opts_obj) = opts_json.as_object()
+        {
+            obj.extend(opts_obj.clone());
+        }
+
+        self.channel().send_no_result("drop", params).await
+    }
+
     /// Waits for the element to satisfy a state condition.
     ///
     /// Uses Playwright's `waitForSelector` RPC. The element state defaults to `visible`
@@ -1957,6 +1980,9 @@ impl Frame {
             if let Some(depth) = opts.depth {
                 params["depth"] = serde_json::Value::from(depth);
             }
+            if let Some(boxes) = opts.boxes {
+                params["boxes"] = serde_json::Value::Bool(boxes);
+            }
         }
 
         let response: AriaSnapshotResponse = self.channel().send("ariaSnapshot", params).await?;
@@ -2028,15 +2054,16 @@ impl Frame {
     /// This is a visual debugging tool and does not affect test assertions.
     ///
     /// See: <https://playwright.dev/docs/api/class-locator#locator-highlight>
-    pub(crate) async fn locator_highlight(&self, selector: &str) -> Result<()> {
-        self.channel()
-            .send_no_result(
-                "highlight",
-                serde_json::json!({
-                    "selector": selector
-                }),
-            )
-            .await
+    pub(crate) async fn locator_highlight(
+        &self,
+        selector: &str,
+        style: Option<&str>,
+    ) -> Result<()> {
+        let mut params = serde_json::json!({ "selector": selector });
+        if let Some(style) = style {
+            params["style"] = serde_json::Value::String(style.to_string());
+        }
+        self.channel().send_no_result("highlight", params).await
     }
 
     /// Evaluates JavaScript expression in the frame context (without return value).
@@ -2130,7 +2157,7 @@ impl Frame {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```no_run
     /// use serde_json::json;
     /// use playwright_rs::protocol::Playwright;
     ///
@@ -2469,6 +2496,12 @@ impl ChannelOwner for Frame {
     }
 
     fn dispose(&self, reason: crate::server::channel_owner::DisposeReason) {
+        // Clear the Page back-reference: Page holds this Frame strongly, so
+        // keeping a strong Page here would form an Arc cycle and leak both
+        // after disposal.
+        if let Ok(mut guard) = self.page.lock() {
+            *guard = None;
+        }
         self.base.dispose(reason)
     }
 
@@ -2543,20 +2576,4 @@ impl std::fmt::Debug for Frame {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Frame").field("guid", &self.guid()).finish()
     }
-}
-
-/// Simple glob pattern matching for URL patterns.
-///
-/// Supports `*` (matches any characters except `/`) and `**` (matches any characters including `/`).
-/// This matches Playwright's URL glob pattern behavior.
-fn glob_match(pattern: &str, text: &str) -> bool {
-    let regex_str = pattern
-        .replace('.', "\\.")
-        .replace("**", "\x00") // placeholder for **
-        .replace('*', "[^/]*")
-        .replace('\x00', ".*"); // restore ** as .*
-    let regex_str = format!("^{}$", regex_str);
-    regex::Regex::new(&regex_str)
-        .map(|re| re.is_match(text))
-        .unwrap_or(false)
 }

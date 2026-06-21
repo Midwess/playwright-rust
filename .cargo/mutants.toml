@@ -7,9 +7,12 @@
 examine_globs = [
     "crates/playwright/src/protocol/locator.rs",
     "crates/playwright/src/protocol/evaluate_conversion.rs",
+    "crates/playwright/src/protocol/glob.rs",
     "crates/playwright/src/protocol/action_options.rs",
     "crates/playwright/src/protocol/click.rs",
     "crates/playwright/src/protocol/screenshot.rs",
+    "crates/playwright/src/protocol/drop_options.rs",
+    "crates/playwright/src/protocol/har_options.rs",
     "crates/playwright/src/protocol/select_option.rs",
     "crates/playwright/src/api/launch_options.rs",
     "crates/playwright/src/protocol/tap.rs",
@@ -72,11 +75,13 @@ exclude_re = [
     "Locator::evaluate",
     "Locator::evaluate_all",
     "Locator::drag_to",
+    "Locator::drop",
     "Locator::with_timeout",
     "Locator::wait_for",
     "Locator::aria_snapshot",
     "Locator::highlight",
     "Locator::selector",
+    "Locator::mask_json",
     "Locator::wrap_error",
     "impl std::fmt::Debug for Locator",
 
@@ -86,6 +91,11 @@ exclude_re = [
 
     # PressSequentiallyOptions — only exercised by integration tests
     "PressSequentiallyOptions",
+
+    # FilterOptions::has / has_not take a Locator, which needs a live Frame —
+    # only constructible in integration tests
+    "FilterOptions::has ",
+    "FilterOptions::has_not ",
 
     # serde_json cannot represent Infinity/NaN/-0, match arms are indistinguishable
     "delete match arm .*(Infinity|NaN|null.*undefined|ui8)",

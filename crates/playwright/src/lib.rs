@@ -73,7 +73,7 @@
 //!
 //! ## Basic Navigation and Interaction
 //!
-//! ```ignore
+//! ```no_run
 //! use playwright_rs::{Playwright, SelectOption};
 //!
 //! #[tokio::main]
@@ -109,7 +109,7 @@
 //!
 //! ## Form Interaction
 //!
-//! ```ignore
+//! ```no_run
 //! use playwright_rs::{Playwright, SelectOption};
 //!
 //! #[tokio::main]
@@ -154,7 +154,7 @@
 //!
 //! ## Element Screenshots
 //!
-//! ```ignore
+//! ```no_run
 //! use playwright_rs::Playwright;
 //!
 //! #[tokio::main]
@@ -183,7 +183,7 @@
 //!
 //! ## Assertions (expect API)
 //!
-//! ```ignore
+//! ```no_run
 //! use playwright_rs::{expect, Playwright};
 //!
 //! #[tokio::main]
@@ -237,7 +237,7 @@
 //! values, eval expressions, request/response bodies — are deliberately
 //! excluded from span fields.
 //!
-//! ```ignore
+//! ```no_run
 //! use tracing_subscriber::EnvFilter;
 //!
 //! tracing_subscriber::fmt()
@@ -281,9 +281,11 @@ pub use error::{Error, Result};
 // Re-export assertions API
 pub use assertions::{PageExpectation, expect, expect_page};
 
-// Screenshot-diff types are gated on the optional feature.
+// Screenshot-diff types are gated on the optional feature. (`Animations` is
+// always available via the protocol re-export below; it is shared with
+// ScreenshotOptions.)
 #[cfg(feature = "screenshot-diff")]
-pub use assertions::{Animations, ScreenshotAssertionOptions, ScreenshotAssertionOptionsBuilder};
+pub use assertions::{ScreenshotAssertionOptions, ScreenshotAssertionOptionsBuilder};
 
 // Re-export Playwright main entry point and browser API
 pub use protocol::{
@@ -300,7 +302,7 @@ pub use protocol::{Request, ResourceTiming};
 // Re-export Locator and element APIs
 pub use protocol::{
     AriaRole, AriaSnapshotMode, AriaSnapshotOptions, BoundingBox, ElementHandle, FilterOptions,
-    GetByRoleOptions, JSHandle, Locator,
+    GetByRoleOptions, HighlightOptions, JSHandle, Locator,
 };
 
 // Re-export navigation and page options
@@ -308,8 +310,9 @@ pub use protocol::{GotoOptions, WaitUntil};
 
 // Re-export action options
 pub use protocol::{
-    CheckOptions, ClickOptions, DragToOptions, FillOptions, HoverOptions, PressOptions,
-    PressSequentiallyOptions, SelectOptions, TapOptions, WaitForOptions, WaitForState,
+    CheckOptions, ClickOptions, DragToOptions, DropOptions, DropOptionsBuilder, FillOptions,
+    HoverOptions, PressOptions, PressSequentiallyOptions, SelectOptions, TapOptions,
+    WaitForOptions, WaitForState,
 };
 
 // Re-export Position (needed for DragToOptions and other options)
@@ -319,7 +322,7 @@ pub use protocol::Position;
 pub use protocol::{FilePayload, SelectOption};
 
 // Re-export screenshot types
-pub use protocol::{ScreenshotClip, ScreenshotOptions, ScreenshotType};
+pub use protocol::{Animations, Caret, Scale, ScreenshotClip, ScreenshotOptions, ScreenshotType};
 
 // Re-export screencast types
 pub use protocol::{
@@ -339,6 +342,14 @@ pub use protocol::{
     StorageState, Viewport,
 };
 
+// Re-export the tracing + HAR API. These were the last consumer-facing
+// cohort still reachable only via `playwright_rs::protocol::*`; bringing
+// them to the crate root matches every other type a consumer constructs
+// (the `protocol::` paths still work).
+pub use protocol::{
+    HarContent, HarMode, StartHarOptions, Tracing, TracingStartOptions, TracingStopOptions,
+};
+
 // Re-export EventWaiter for use with expect_page() / expect_close()
 pub use protocol::EventWaiter;
 
@@ -352,7 +363,7 @@ pub use protocol::{ConsoleMessage, ConsoleMessageLocation};
 pub use protocol::{DeviceDescriptor, DeviceViewport};
 
 // Re-export WebError
-pub use protocol::WebError;
+pub use protocol::{WebError, WebErrorLocation};
 
 // Re-export WebSocketRoute
 pub use protocol::{WebSocketRoute, WebSocketRouteCloseOptions};

@@ -1,5 +1,5 @@
 //! Programmatic parser for [Playwright][pw] trace zip files
-//! (format v8, matching Playwright 1.59.x).
+//! (trace format v8).
 //!
 //! # When to reach for this crate
 //!

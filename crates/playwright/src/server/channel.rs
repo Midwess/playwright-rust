@@ -38,7 +38,7 @@ use std::sync::Arc;
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// // Example of using Channel to send RPC calls
 /// use playwright_rs::server::channel::Channel;
 /// use serde::{Serialize, Deserialize};
@@ -101,7 +101,7 @@ impl Channel {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```no_run
     /// # use playwright_rs::server::channel::Channel;
     /// # use serde::{Serialize, Deserialize};
     /// # async fn example(channel: &Channel) -> Result<(), Box<dyn std::error::Error>> {

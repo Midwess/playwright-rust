@@ -15,6 +15,7 @@
 ///
 /// See: <https://playwright.dev/docs/api/class-consolemessage#console-message-location>
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct ConsoleMessageLocation {
     /// The URL of the resource that produced the console message.
     pub url: String,
@@ -124,7 +125,7 @@ impl ConsoleMessage {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```no_run
     /// # use playwright_rs::protocol::Playwright;
     /// # use std::time::Duration;
     /// # use std::sync::{Arc, Mutex};

@@ -1,4 +1,6 @@
-use playwright_rs::protocol::{BrowserContextOptions, Geolocation, Playwright, Viewport};
+use playwright_rs::protocol::{
+    BrowserContextOptions, BrowserType, Geolocation, Playwright, Viewport,
+};
 use std::env;
 
 #[tokio::test]
@@ -411,25 +413,16 @@ async fn test_context_with_storage_state_inline() {
         .expect("Failed to launch browser");
 
     // Create storage state with cookies and localStorage
-    let storage_state = StorageState {
-        cookies: vec![Cookie {
-            name: "test_cookie".to_string(),
-            value: "test_value".to_string(),
-            domain: ".example.com".to_string(),
-            path: "/".to_string(),
-            expires: -1.0,
-            http_only: false,
-            secure: false,
-            same_site: Some("Lax".to_string()),
-        }],
-        origins: vec![Origin {
-            origin: "https://example.com".to_string(),
-            local_storage: vec![LocalStorageItem {
-                name: "test_key".to_string(),
-                value: "test_storage_value".to_string(),
-            }],
-        }],
-    };
+    let storage_state = StorageState::default()
+        .cookies(vec![
+            Cookie::new("test_cookie", "test_value")
+                .domain(".example.com")
+                .same_site("Lax"),
+        ])
+        .origins(vec![Origin::new(
+            "https://example.com",
+            vec![LocalStorageItem::new("test_key", "test_storage_value")],
+        )]);
 
     let options = BrowserContextOptions::builder()
         .storage_state(storage_state)
@@ -598,25 +591,19 @@ async fn test_context_storage_state_cross_browser() {
         };
 
         // Create storage state with cookies
-        let storage_state = StorageState {
-            cookies: vec![Cookie {
-                name: "browser_test_cookie".to_string(),
-                value: format!("{}_value", browser_name),
-                domain: ".example.com".to_string(),
-                path: "/".to_string(),
-                expires: -1.0,
-                http_only: false,
-                secure: false,
-                same_site: Some("Lax".to_string()),
-            }],
-            origins: vec![Origin {
-                origin: "https://example.com".to_string(),
-                local_storage: vec![LocalStorageItem {
-                    name: "browser_key".to_string(),
-                    value: format!("{}_storage", browser_name),
-                }],
-            }],
-        };
+        let storage_state = StorageState::default()
+            .cookies(vec![
+                Cookie::new("browser_test_cookie", format!("{}_value", browser_name))
+                    .domain(".example.com")
+                    .same_site("Lax"),
+            ])
+            .origins(vec![Origin::new(
+                "https://example.com",
+                vec![LocalStorageItem::new(
+                    "browser_key",
+                    format!("{}_storage", browser_name),
+                )],
+            )]);
 
         let options = BrowserContextOptions::builder()
             .storage_state(storage_state)
@@ -673,10 +660,7 @@ async fn test_context_storage_state_empty() {
         .await
         .expect("Failed to launch browser");
 
-    let storage_state = StorageState {
-        cookies: vec![],
-        origins: vec![],
-    };
+    let storage_state = StorageState::default();
 
     let options = BrowserContextOptions::builder()
         .storage_state(storage_state)
@@ -909,37 +893,42 @@ async fn test_browser_context_is_closed() {
     browser.close().await.expect("Failed to close browser");
 }
 
+// One engine per test (rather than all three in a single test) so each browser
+// launch gets its own timeout budget to avoid timeouts on slow stress runs.
+async fn assert_context_browser(browser_type: &BrowserType, name: &str) {
+    let browser = browser_type.launch().await.unwrap();
+    let context = browser.new_context().await.unwrap();
+
+    let context_browser = context.browser();
+    assert!(
+        context_browser.is_some(),
+        "{name} context should return Some(Browser)"
+    );
+    let ctx_browser = context_browser.unwrap();
+    assert_eq!(ctx_browser.name(), browser.name());
+    assert_eq!(ctx_browser.version(), browser.version());
+
+    context.close().await.unwrap();
+    browser.close().await.unwrap();
+}
+
 #[tokio::test]
 #[ignore]
-async fn test_context_browser_cross_browser() {
-    let playwright = Playwright::launch().await.unwrap();
+async fn test_context_browser_chromium() {
+    let pw = Playwright::launch().await.unwrap();
+    assert_context_browser(pw.chromium(), "chromium").await;
+}
 
-    // Test on all three browsers
-    let browser_types = vec![
-        ("chromium", playwright.chromium()),
-        ("firefox", playwright.firefox()),
-        ("webkit", playwright.webkit()),
-    ];
+#[tokio::test]
+#[ignore]
+async fn test_context_browser_firefox() {
+    let pw = Playwright::launch().await.unwrap();
+    assert_context_browser(pw.firefox(), "firefox").await;
+}
 
-    for (name, browser_type) in browser_types {
-        println!("Testing context.browser() on {}", name);
-
-        let browser = browser_type.launch().await.unwrap();
-        let context = browser.new_context().await.unwrap();
-
-        // Should return browser
-        let context_browser = context.browser();
-        assert!(
-            context_browser.is_some(),
-            "{} context should return Some(Browser)",
-            name
-        );
-
-        let ctx_browser = context_browser.unwrap();
-        assert_eq!(ctx_browser.name(), browser.name());
-        assert_eq!(ctx_browser.version(), browser.version());
-
-        context.close().await.unwrap();
-        browser.close().await.unwrap();
-    }
+#[tokio::test]
+#[ignore]
+async fn test_context_browser_webkit() {
+    let pw = Playwright::launch().await.unwrap();
+    assert_context_browser(pw.webkit(), "webkit").await;
 }

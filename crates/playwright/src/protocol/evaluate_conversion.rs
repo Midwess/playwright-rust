@@ -29,7 +29,7 @@
 //!
 //! # Example
 //!
-//! ```ignore
+//! ```no_run
 //! use playwright_rs::protocol::{serialize_argument, parse_result};
 //! use serde::Deserialize;
 //!

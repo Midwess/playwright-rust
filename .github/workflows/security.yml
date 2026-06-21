@@ -18,7 +18,7 @@ jobs:
     name: Security Audit
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
@@ -33,7 +33,7 @@ jobs:
     name: License & Dependency Check
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
@@ -48,7 +48,7 @@ jobs:
     name: Supply Chain Review
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
@@ -65,7 +65,7 @@ jobs:
     # Only check on release tags — compares against last published version
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
@@ -94,7 +94,7 @@ jobs:
       CARGO_INCREMENTAL: "1"
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
@@ -124,6 +124,47 @@ jobs:
         name: mutation-report
         path: mutants.out/
 
+  fuzz-smoke:
+    name: Fuzz smoke (protocol parsers)
+    runs-on: ubuntu-latest
+    # Short fixed-budget runs of the cargo-fuzz targets (evaluate-conversion
+    # parsers). Weekly + on demand: too slow for every push, and cargo-fuzz
+    # needs nightly.
+    if: >
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch'
+    env:
+      PLAYWRIGHT_SKIP_DRIVER_DOWNLOAD: "1"
+
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Install Rust nightly
+      uses: dtolnay/rust-toolchain@nightly
+
+    - name: Install cargo-fuzz
+      uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-fuzz
+
+    - uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: crates/playwright/fuzz
+
+    - name: Run fuzz targets (60s each)
+      working-directory: crates/playwright
+      run: |
+        for target in fuzz_parse_value fuzz_parse_result fuzz_serialize_argument; do
+          cargo +nightly fuzz run "$target" -- -max_total_time=60 -timeout=10
+        done
+
+    - name: Upload crash artifacts
+      if: failure()
+      uses: actions/upload-artifact@v7
+      with:
+        name: fuzz-artifacts
+        path: crates/playwright/fuzz/artifacts/
+
   mutation-testing-diff:
     name: Mutation Testing (diff)
     runs-on: ubuntu-latest
@@ -136,7 +177,7 @@ jobs:
       CARGO_INCREMENTAL: "1"
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
       with:
         # Need history beyond HEAD so `git diff` can reach the diff base.
         fetch-depth: 0

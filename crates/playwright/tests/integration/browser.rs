@@ -244,11 +244,12 @@ async fn test_browser_is_connected() {
     // Note: close() waits for the server to process the close command,
     // which should trigger the "disconnected" event before returning or shortly after.
 
-    // Check immediately first.
-    if browser.is_connected() {
-        // Give it a moment for the event to arrive
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-    }
+    // The "disconnected" event may arrive shortly after close(); poll for it
+    // rather than guessing a fixed delay.
+    crate::common::poll_until(std::time::Duration::from_secs(3), || {
+        !browser.is_connected()
+    })
+    .await;
 
     assert!(
         !browser.is_connected(),
@@ -268,10 +269,10 @@ async fn test_browser_bind_and_unbind() {
     let result = browser
         .bind(
             "playwright-rs-bind-test",
-            Some(BindOptions {
-                host: Some("127.0.0.1".to_string()),
-                port: Some(0), // OS-assigned
-                ..Default::default()
+            Some({
+                let mut options = BindOptions::default().host("127.0.0.1");
+                options.port = Some(0); // OS-assigned
+                options
             }),
         )
         .await
@@ -348,8 +349,11 @@ async fn test_browser_contexts() {
 
     // Close first context
     ctx1.close().await.expect("Failed to close context 1");
-    // Give the event a moment to propagate
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    // Wait for the context-close event to propagate instead of a fixed sleep.
+    crate::common::poll_until(std::time::Duration::from_secs(3), || {
+        browser.contexts().len() == 1
+    })
+    .await;
     let after_close_first = browser.contexts();
     assert_eq!(
         after_close_first.len(),
@@ -441,11 +445,7 @@ async fn test_browser_tracing() {
 
     // Start tracing with screenshots enabled
     use playwright_rs::protocol::StartTracingOptions;
-    let options = StartTracingOptions {
-        screenshots: Some(true),
-        categories: None,
-        page: None,
-    };
+    let options = StartTracingOptions::default().screenshots(true);
     browser
         .start_tracing(Some(options))
         .await
@@ -497,4 +497,42 @@ async fn test_browser_new_browser_cdp_session() {
 
     session.detach().await.expect("detach should succeed");
     browser.close().await.expect("Failed to close browser");
+}
+
+#[tokio::test]
+async fn test_browser_on_context() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    let pw = Playwright::launch().await.expect("launch playwright");
+    let browser = pw.chromium().launch().await.expect("launch chromium");
+
+    let count = Arc::new(AtomicUsize::new(0));
+    let c = count.clone();
+    browser
+        .on_context(move |_ctx| {
+            let c = c.clone();
+            async move {
+                c.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+        })
+        .await
+        .expect("register on_context");
+
+    let ctx = browser.new_context().await.expect("new context");
+
+    let mut waited = Duration::ZERO;
+    while count.load(Ordering::SeqCst) == 0 && waited < Duration::from_secs(3) {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        waited += Duration::from_millis(50);
+    }
+    assert!(
+        count.load(Ordering::SeqCst) >= 1,
+        "Browser on_context should fire when a new context is created"
+    );
+
+    ctx.close().await.ok();
+    browser.close().await.expect("close browser");
 }

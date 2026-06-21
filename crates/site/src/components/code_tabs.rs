@@ -1,9 +1,8 @@
 use leptos::prelude::*;
 
-// No `transition` here: an animated active-indicator races the element
-// screenshot in site-e2e (Playwright would use animations:"disabled", which
-// playwright-rs does not yet surface). Instant switching keeps receipts crisp.
-const TAB_BASE: &str = "-mb-px border-b-2 px-3 py-1.5 text-xs font-semibold";
+// The active-indicator animates; site-e2e captures receipts with
+// animations(Disabled) so the transition does not race the screenshot.
+const TAB_BASE: &str = "-mb-px border-b-2 px-3 py-1.5 text-xs font-semibold transition-colors";
 const TAB_ACTIVE: &str = "border-rust-500 text-rust-300";
 const TAB_INACTIVE: &str = "border-transparent text-rust-50/50 hover:text-rust-50/80";
 

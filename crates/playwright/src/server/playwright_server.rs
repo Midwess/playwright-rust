@@ -15,7 +15,7 @@ use tracing::Instrument;
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// # use playwright_rs::server::playwright_server::PlaywrightServer;
 /// # #[tokio::main]
 /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {

@@ -20,8 +20,11 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use axum::Router;
-use playwright_rs::expect;
-use playwright_rs::protocol::{Page, Playwright, TracingStartOptions, TracingStopOptions};
+use playwright_rs::protocol::{
+    Animations, AriaSnapshotOptions, Page, Playwright, ScreenshotOptions, StartHarOptions,
+    TracingStartOptions, TracingStopOptions,
+};
+use playwright_rs::{expect, expect_page};
 use tower_http::services::ServeDir;
 
 fn dist_dir() -> PathBuf {
@@ -45,10 +48,16 @@ async fn serve(dist: &PathBuf) -> (SocketAddr, tokio::task::JoinHandle<()>) {
 /// step's receipt is distinct (a viewport screenshot of adjacent sections looks
 /// nearly identical).
 async fn shot(page: &Page, steps: &Path, file: &str, selector: &str) {
+    // Freeze CSS animations/transitions so the receipt captures the settled
+    // state. This consumes the `animations` option that dogfooding this very
+    // site added to playwright-rs.
+    let opts = ScreenshotOptions::builder()
+        .animations(Animations::Disabled)
+        .build();
     let bytes = page
         .locator(selector)
         .await
-        .screenshot(None)
+        .screenshot(Some(opts))
         .await
         .unwrap_or_else(|e| panic!("screenshot {selector}: {e:?}"));
     std::fs::write(steps.join(file), bytes)
@@ -65,7 +74,11 @@ async fn landing_page_works_as_advertised() {
         );
         return;
     }
-    let steps = dist.join("receipts").join("steps");
+    // Write receipts into the site's `public/receipts/` source dir (not dist/).
+    // Trunk's copy-dir re-copies it into dist on every build, so receipts
+    // survive `trunk serve` rebuilds and show up with hot reload.
+    let receipts = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../site/public/receipts");
+    let steps = receipts.join("steps");
     std::fs::create_dir_all(&steps).expect("create receipts/steps dir");
 
     let (addr, server) = serve(&dist).await;
@@ -77,14 +90,25 @@ async fn landing_page_works_as_advertised() {
     // Trace the whole run; published as a downloadable receipt.
     let tracing = context.tracing().await.expect("tracing handle");
     tracing
-        .start(Some(TracingStartOptions {
-            name: Some("playwright-rust.dev dogfood".into()),
-            screenshots: Some(true),
-            snapshots: Some(true),
-            ..Default::default()
-        }))
+        .start(Some(
+            TracingStartOptions::default()
+                .name("playwright-rust.dev dogfood")
+                .screenshots(true)
+                .snapshots(true),
+        ))
         .await
         .expect("start trace");
+
+    // Also record a HAR of the run; published as a downloadable receipt so
+    // visitors can see exactly what the page loaded. Real network traffic, no
+    // contrived surface needed.
+    tracing
+        .start_har(
+            receipts.join("dogfood.har").to_string_lossy().into_owned(),
+            Some(StartHarOptions::default()),
+        )
+        .await
+        .expect("start HAR recording");
 
     let page = context.new_page().await.expect("new page");
     page.goto(&format!("http://{addr}"), None)
@@ -103,6 +127,24 @@ async fn landing_page_works_as_advertised() {
         .to_have_attribute("href", "https://docs.rs/playwright-rs")
         .await
         .expect("the Docs button links to docs.rs");
+    // Accessibility guard: assert the page's key landmarks via the page-level
+    // ARIA snapshot (Playwright 1.60). Partial/template matching keeps it robust
+    // to unrelated copy changes while catching structural a11y regressions (the
+    // hero stops being a level-1 heading in a `banner`, a section heading loses
+    // its level, etc.).
+    expect_page(&page)
+        .to_match_aria_snapshot(
+            "- banner:\n  - heading \"Playwright for Rust\" [level=1]\n- heading \"Install\" [level=2]\n- heading \"What you get\" [level=2]",
+        )
+        .await
+        .expect("the page's accessibility landmarks are present");
+    // Publish the full accessibility tree as a downloadable receipt, with each
+    // element's bounding box appended (the 1.60 `boxes` option).
+    let aria_tree = page
+        .aria_snapshot(Some(AriaSnapshotOptions::default().boxes(true)))
+        .await
+        .expect("aria snapshot");
+    std::fs::write(receipts.join("aria-snapshot.txt"), aria_tree).expect("write aria receipt");
     shot(&page, &steps, "01.png", "#hero").await;
 
     // Step 2: switch the comparison language and assert the resulting state.
@@ -207,6 +249,22 @@ async fn landing_page_works_as_advertised() {
         .expect("footer names the Microsoft trademark");
     shot(&page, &steps, "05.png", "#footer").await;
 
+    // Step 6: demonstrate masking. Capture the hero with its badges redacted
+    // behind a solid rust-colored box. This consumes the mask / mask_color
+    // screenshot options that completed screenshot parity in playwright-rs.
+    let masked = ScreenshotOptions::builder()
+        .animations(Animations::Disabled)
+        .mask(vec![page.locator("#hero-badges img").await])
+        .mask_color("#ce422b")
+        .build();
+    let bytes = page
+        .locator("#hero")
+        .await
+        .screenshot(Some(masked))
+        .await
+        .expect("masked hero screenshot");
+    std::fs::write(steps.join("06.png"), bytes).expect("write step 06 screenshot");
+
     // The walkthrough is itself an interactive stepper. Driving it covers the
     // third interactive widget on the page.
     page.locator("#walk-next")
@@ -215,20 +273,18 @@ async fn landing_page_works_as_advertised() {
         .await
         .expect("click the walkthrough Next button");
     expect(page.locator("#walkthrough").await)
-        .to_contain_text("Step 2 of 5")
+        .to_contain_text("Step 2 of 6")
         .await
         .expect("the walkthrough advances to the next step");
 
+    // Write the HAR receipt (every request the run made).
+    tracing.stop_har().await.expect("write HAR receipt");
+
     // Save the trace zip as the deep-dive receipt.
     tracing
-        .stop(Some(TracingStopOptions {
-            path: Some(
-                dist.join("receipts")
-                    .join("trace.zip")
-                    .to_string_lossy()
-                    .into_owned(),
-            ),
-        }))
+        .stop(Some(TracingStopOptions::default().path(
+            receipts.join("trace.zip").to_string_lossy().into_owned(),
+        )))
         .await
         .expect("write trace receipt");
 

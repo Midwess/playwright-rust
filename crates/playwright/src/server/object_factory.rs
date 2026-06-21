@@ -46,7 +46,7 @@ use std::sync::Arc;
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// # use playwright_rs::server::object_factory::create_object;
 /// # use playwright_rs::server::channel_owner::ParentOrConnection;
 /// # use playwright_rs::server::connection::ConnectionLike;
@@ -138,7 +138,24 @@ pub async fn create_object(
                 }
             };
 
-            Arc::new(Page::new(parent_owner, type_name, guid, initializer)?)
+            // Resolve the main frame eagerly: the protocol creates the Frame
+            // object before the Page that references it, so Page methods that
+            // need the main frame never have a fallible registry lookup.
+            let main_frame_guid = initializer["mainFrame"]["guid"].as_str().ok_or_else(|| {
+                Error::ProtocolError("Page initializer missing 'mainFrame.guid' field".to_string())
+            })?;
+            let main_frame: Frame = parent_owner
+                .connection()
+                .get_typed::<Frame>(main_frame_guid)
+                .await?;
+
+            Arc::new(Page::new(
+                parent_owner,
+                type_name,
+                guid,
+                initializer,
+                main_frame,
+            )?)
         }
 
         "Frame" => {

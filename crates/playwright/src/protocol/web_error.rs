@@ -17,7 +17,7 @@
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use playwright_rs::protocol::Playwright;
 ///
 /// #[tokio::main]
@@ -56,6 +56,21 @@ pub struct WebError {
     page: Option<crate::protocol::Page>,
     /// The error message extracted from the uncaught exception.
     error: String,
+    /// Source location of the error (script URL, line, column), if reported.
+    location: Option<WebErrorLocation>,
+}
+
+/// Source location of an uncaught exception: the script URL, 1-based line, and
+/// 0-based column.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct WebErrorLocation {
+    /// URL of the script that threw.
+    pub url: String,
+    /// 1-based line number.
+    pub line: i32,
+    /// 0-based column number.
+    pub column: i32,
 }
 
 impl WebError {
@@ -63,8 +78,24 @@ impl WebError {
     ///
     /// Called by `BrowserContext::on_event("pageError")` when the context-level
     /// weberror dispatch path fires.
-    pub(crate) fn new(error: String, page: Option<crate::protocol::Page>) -> Self {
-        Self { page, error }
+    pub(crate) fn new(
+        error: String,
+        page: Option<crate::protocol::Page>,
+        location: Option<WebErrorLocation>,
+    ) -> Self {
+        Self {
+            page,
+            error,
+            location,
+        }
+    }
+
+    /// Returns the source location of the uncaught exception, if reported
+    /// (script URL, line, column).
+    ///
+    /// See: <https://playwright.dev/docs/api/class-weberror#web-error-location>
+    pub fn location(&self) -> Option<&WebErrorLocation> {
+        self.location.as_ref()
     }
 
     /// Returns the page that produced this error, if available.

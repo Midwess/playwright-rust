@@ -25,7 +25,7 @@ use std::process::Command;
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use playwright_rs::server::driver::get_driver_executable;
 ///
 /// let (node_exe, cli_js) = get_driver_executable()?;
@@ -324,7 +324,7 @@ fn find_node_executable() -> Result<PathBuf> {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use playwright_rs::install_browsers;
 ///
 /// #[tokio::main]
@@ -361,7 +361,7 @@ pub async fn install_browsers(browsers: Option<&[&str]>) -> Result<()> {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use playwright_rs::install_browsers_with_deps;
 ///
 /// #[tokio::main]

@@ -42,9 +42,11 @@ overlay.
 - **`expect()` assertions over manual polling.** They auto-retry within
   the default timeout — never sprinkle `tokio::time::sleep` between
   an action and a check.
-- **Builders for options.** `goto`, `click`, `screenshot`, `fill`,
-  `tracing().start`, etc. take an `Options` struct constructed with
-  `..Default::default()`.
+- **Builders / setters for options.** `goto`, `click`, `screenshot`,
+  `fill`, `tracing().start`, etc. take an `Options` struct. These are
+  `#[non_exhaustive]`, so struct literals won't compile — use the
+  type's `builder()` where it has one, otherwise chain setters off
+  `Default`/`new()` (e.g. `GetByRoleOptions::default().name("OK")`).
 - **`Result<T>` and `async/await` on `tokio`** throughout. One error
   type: `playwright_rs::Error`.
 - **No reimplemented browser protocols.** This crate is a thin
@@ -52,6 +54,13 @@ overlay.
   playwright-python / java / .NET semantics. When in doubt, the
   [upstream Playwright docs](https://playwright.dev/docs/api) are
   authoritative.
+- **Newer surface worth knowing (options on docs.rs):** stable/redacted
+  screenshots (`animations(Disabled)`, `mask`); context-level events
+  (`BrowserContext::on_download` / `on_page_load` / `on_frame_*`,
+  `Browser::on_context`) for multi-tab fixtures; HAR capture
+  (`tracing().start_har` / `stop_har`, replayable via `route_from_har`);
+  external file drop (`Locator::drop`, vs intra-page `drag_to`);
+  ARIA-tree assertions (`expect_page(..).to_match_aria_snapshot`).
 
 ### Debugging failures
 

@@ -30,6 +30,14 @@ pub trait ConnectionLike: Send + Sync {
     /// Unregister an object from the connection's registry.
     async fn unregister_object(&self, guid: &str);
 
+    /// Unregister an object synchronously.
+    ///
+    /// The registry is a synchronous lock, so this needs no async context;
+    /// it exists so `dispose()` (a sync path) can unregister immediately
+    /// instead of spawning a task and leaving a window where a disposed
+    /// object still receives events.
+    fn unregister_object_sync(&self, guid: &str);
+
     /// Get an object by GUID.
     async fn get_object(&self, guid: &str) -> Result<Arc<dyn ChannelOwner>>;
 
@@ -61,10 +69,16 @@ pub trait ConnectionLike: Send + Sync {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
+/// # use std::sync::Arc;
+/// # use playwright_rs::protocol::Page;
+/// # use playwright_rs::server::connection::ConnectionLike;
 /// use playwright_rs::server::connection::ConnectionExt;
 ///
+/// # async fn example(connection: Arc<dyn ConnectionLike>, guid: String) -> playwright_rs::Result<()> {
 /// let page: Page = connection.get_typed::<Page>(&guid).await?;
+/// # Ok(())
+/// # }
 /// ```
 #[async_trait::async_trait]
 pub trait ConnectionExt: ConnectionLike {
@@ -93,8 +107,14 @@ impl<C: ConnectionLike + ?Sized> ConnectionExt for C {}
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
+/// # use std::sync::Arc;
+/// # use playwright_rs::protocol::Page;
+/// # use playwright_rs::server::channel_owner::ChannelOwner;
+/// # use playwright_rs::server::connection::downcast_parent;
+/// # fn example(dialog_arc: Arc<dyn ChannelOwner>) {
 /// let page: Option<Page> = downcast_parent::<Page>(&*dialog_arc);
+/// # }
 /// ```
 pub fn downcast_parent<T: ChannelOwner + Clone + 'static>(obj: &dyn ChannelOwner) -> Option<T> {
     obj.parent()
@@ -219,11 +239,19 @@ type ObjectRegistry = HashMap<Arc<str>, Arc<dyn ChannelOwner>>;
 /// JSON-RPC connection to Playwright server
 pub struct Connection {
     last_id: AtomicU32,
-    callbacks: Arc<TokioMutex<HashMap<u32, oneshot::Sender<Result<Value>>>>>,
+    /// Pending request callbacks. Sync lock: only ever held for an
+    /// insert/remove, never across an await point.
+    callbacks: Arc<ParkingLotMutex<HashMap<u32, oneshot::Sender<Result<Value>>>>>,
+    /// Transport writer. A tokio (async-aware) mutex on purpose: the guard is
+    /// held across the `send().await`, which is what serializes whole-message
+    /// writes onto the single pipe/socket.
     sender: Arc<TokioMutex<Box<dyn TransportSender>>>,
-    message_rx: Arc<TokioMutex<Option<mpsc::UnboundedReceiver<Value>>>>,
+    message_rx: Arc<TokioMutex<Option<mpsc::Receiver<Value>>>>,
     transport_receiver: Arc<TokioMutex<Option<Box<dyn TransportReceiver>>>>,
     objects: Arc<ParkingLotMutex<ObjectRegistry>>,
+    /// Signalled whenever an object is registered; lets `wait_for_object`
+    /// block on creation instead of polling.
+    object_created: tokio::sync::Notify,
     /// Shared Selectors coordinator for this connection.
     ///
     /// Selectors is a client-side object; it is created once per Connection and
@@ -246,15 +274,16 @@ impl Connection {
     pub fn new(
         sender: impl TransportSender + 'static,
         receiver: impl TransportReceiver + 'static,
-        message_rx: mpsc::UnboundedReceiver<Value>,
+        message_rx: mpsc::Receiver<Value>,
     ) -> Self {
         Self {
             last_id: AtomicU32::new(0),
-            callbacks: Arc::new(TokioMutex::new(HashMap::new())),
+            callbacks: Arc::new(ParkingLotMutex::new(HashMap::new())),
             sender: Arc::new(TokioMutex::new(Box::new(sender))),
             message_rx: Arc::new(TokioMutex::new(Some(message_rx))),
             transport_receiver: Arc::new(TokioMutex::new(Some(Box::new(receiver)))),
             objects: Arc::new(ParkingLotMutex::new(HashMap::new())),
+            object_created: tokio::sync::Notify::new(),
             selectors: Arc::new(Selectors::new()),
             #[cfg(debug_assertions)]
             creator_runtime: tokio::runtime::Handle::try_current().ok().map(|h| h.id()),
@@ -298,7 +327,7 @@ impl Connection {
         tracing::Span::current().record("id", id);
 
         let (tx, rx) = oneshot::channel();
-        self.callbacks.lock().await.insert(id, tx);
+        self.callbacks.lock().insert(id, tx);
 
         let request = Request {
             id,
@@ -336,10 +365,7 @@ impl Connection {
 
         tracing::debug!("Root object registered, sending initialize message");
 
-        let root_typed: Root = self
-            .get_typed::<Root>("")
-            .await
-            .expect("Root object should be Root type");
+        let root_typed: Root = self.get_typed::<Root>("").await?;
 
         let response = tokio::time::timeout(Duration::from_secs(30), root_typed.initialize())
             .await
@@ -419,17 +445,12 @@ impl Connection {
         match message {
             Message::Response(response) => {
                 tracing::trace!("Processing response for ID: {}", response.id);
-                let callback = self
-                    .callbacks
-                    .lock()
-                    .await
-                    .remove(&response.id)
-                    .ok_or_else(|| {
-                        Error::ProtocolError(format!(
-                            "Cannot find request to respond: id={}",
-                            response.id
-                        ))
-                    })?;
+                let callback = self.callbacks.lock().remove(&response.id).ok_or_else(|| {
+                    Error::ProtocolError(format!(
+                        "Cannot find request to respond: id={}",
+                        response.id
+                    ))
+                })?;
 
                 let result = if let Some(error_wrapper) = response.error {
                     Err(parse_protocol_error(error_wrapper.error))
@@ -570,19 +591,22 @@ impl Connection {
     }
 
     pub async fn wait_for_object(&self, guid: &str) -> Result<Arc<dyn ChannelOwner>> {
-        use tokio::time::{Duration, sleep};
-        let start = std::time::Instant::now();
+        use tokio::time::{Duration, Instant, timeout_at};
+        let deadline = Instant::now() + Duration::from_secs(30);
         loop {
+            // Arm the notification BEFORE checking the registry: a
+            // registration between check and wait is then still observed
+            // (Notify keeps one permit), so no wakeup can be missed.
+            let created = self.object_created.notified();
             if let Some(obj) = self.objects.lock().get(guid) {
                 return Ok(obj.clone());
             }
-            if start.elapsed() > Duration::from_secs(30) {
+            if timeout_at(deadline, created).await.is_err() {
                 return Err(Error::Timeout(format!(
                     "Timed out waiting for object {}",
                     guid
                 )));
             }
-            sleep(Duration::from_millis(10)).await;
         }
     }
 
@@ -624,9 +648,14 @@ impl ConnectionLike for Connection {
 
     async fn register_object(&self, guid: Arc<str>, object: Arc<dyn ChannelOwner>) {
         self.objects.lock().insert(guid, object);
+        self.object_created.notify_waiters();
     }
 
     async fn unregister_object(&self, guid: &str) {
+        self.unregister_object_sync(guid);
+    }
+
+    fn unregister_object_sync(&self, guid: &str) {
         self.objects.lock().remove(guid);
     }
 

@@ -30,7 +30,7 @@ use tracing::Instrument;
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use playwright_rs::protocol::{
 ///     Playwright, ScreenshotOptions, ScreenshotType, AddStyleTagOptions, AddScriptTagOptions,
 ///     EmulateMediaOptions, Media, ColorScheme, Viewport,
@@ -177,14 +177,9 @@ use tracing::Instrument;
 #[derive(Clone)]
 pub struct Page {
     base: ChannelOwnerImpl,
-    /// Current URL of the page
-    /// Wrapped in RwLock to allow updates from events
-    url: Arc<RwLock<String>>,
-    /// GUID of the main frame
-    main_frame_guid: Arc<str>,
-    /// Cached reference to the main frame for synchronous URL access
-    /// This is populated after the first call to main_frame()
-    cached_main_frame: Arc<Mutex<Option<crate::protocol::Frame>>>,
+    /// The page's main frame, resolved once at construction (the protocol
+    /// guarantees the Frame object exists before the Page that references it)
+    main_frame: crate::protocol::Frame,
     /// Route handlers for network interception
     route_handlers: Arc<Mutex<Vec<RouteHandlerEntry>>>,
     /// Download event handlers
@@ -452,15 +447,8 @@ impl Page {
         type_name: String,
         guid: Arc<str>,
         initializer: Value,
+        main_frame: crate::protocol::Frame,
     ) -> Result<Self> {
-        // Extract mainFrame GUID from initializer
-        let main_frame_guid: Arc<str> =
-            Arc::from(initializer["mainFrame"]["guid"].as_str().ok_or_else(|| {
-                crate::error::Error::ProtocolError(
-                    "Page initializer missing 'mainFrame.guid' field".to_string(),
-                )
-            })?);
-
         // Check the parent BrowserContext's initializer for record_video before
         // moving `parent` into ChannelOwnerImpl. The Playwright server delivers
         // the video artifact GUID directly in the Page initializer's "video" field.
@@ -484,7 +472,6 @@ impl Page {
         );
 
         // Initialize URL to about:blank
-        let url = Arc::new(RwLock::new("about:blank".to_string()));
 
         // Initialize empty route handlers
         let route_handlers = Arc::new(Mutex::new(Vec::new()));
@@ -496,7 +483,6 @@ impl Page {
         let ws_route_handlers = Arc::new(Mutex::new(Vec::new()));
 
         // Initialize cached main frame as empty (will be populated on first access)
-        let cached_main_frame = Arc::new(Mutex::new(None));
 
         // Extract viewport from initializer (may be null for no_viewport contexts)
         let initial_viewport: Option<Viewport> =
@@ -536,9 +522,7 @@ impl Page {
 
         Ok(Self {
             base,
-            url,
-            main_frame_guid,
-            cached_main_frame,
+            main_frame,
             route_handlers,
             download_handlers,
             dialog_handlers,
@@ -606,22 +590,16 @@ impl Page {
     /// `frame.page()`, `frame.locator()`, and `frame.get_by_*()` work correctly.
     #[tracing::instrument(level = "debug", skip_all, fields(guid = %self.guid()))]
     pub async fn main_frame(&self) -> Result<crate::protocol::Frame> {
-        // Get and downcast the Frame object from the connection's object registry
-        let frame: crate::protocol::Frame = self
-            .connection()
-            .get_typed::<crate::protocol::Frame>(&self.main_frame_guid)
-            .await?;
+        Ok(self.main_frame_wired())
+    }
 
-        // Wire up the back-reference so frame.page() / frame.locator() work.
-        // This is safe to call multiple times (subsequent calls are no-ops once set).
+    /// Clone of the construction-time main frame with the page back-reference
+    /// wired, so `frame.page()` / `frame.locator()` work. Infallible: the
+    /// frame is resolved when the Page is created.
+    pub(crate) fn main_frame_wired(&self) -> crate::protocol::Frame {
+        let frame = self.main_frame.clone();
         frame.set_page(self.clone());
-
-        // Cache the frame for synchronous access in url()
-        if let Ok(mut cached) = self.cached_main_frame.lock() {
-            *cached = Some(frame.clone());
-        }
-
-        Ok(frame)
+        frame
     }
 
     /// Returns the current URL of the page.
@@ -631,15 +609,9 @@ impl Page {
     ///
     /// See: <https://playwright.dev/docs/api/class-page#page-url>
     pub fn url(&self) -> String {
-        // Try to get URL from the cached main frame (source of truth for navigation including hashes)
-        if let Ok(cached) = self.cached_main_frame.lock()
-            && let Some(frame) = cached.as_ref()
-        {
-            return frame.url();
-        }
-
-        // Fallback to cached URL if frame not yet loaded
-        self.url.read().unwrap().clone()
+        // The main frame is the source of truth for navigation, including
+        // hash fragments from anchor navigation.
+        self.main_frame.url()
     }
 
     /// Closes the page.
@@ -685,12 +657,19 @@ impl Page {
     ///
     /// To get a filtered subset, chain a standard iterator filter:
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # use playwright_rs::Playwright;
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let pw = Playwright::launch().await?;
+    /// # let browser = pw.chromium().launch().await?;
+    /// # let page = browser.new_page().await?;
     /// let errors: Vec<_> = page
     ///     .console_messages()
     ///     .into_iter()
-    ///     .filter(|m| m.message_type() == "error")
+    ///     .filter(|m| m.type_() == "error")
     ///     .collect();
+    /// # Ok(())
+    /// # }
     /// ```
     ///
     /// Use [`clear_console_messages`](Self::clear_console_messages) to drop
@@ -718,12 +697,19 @@ impl Page {
     ///
     /// To get a filtered subset, chain a standard iterator filter:
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # use playwright_rs::Playwright;
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let pw = Playwright::launch().await?;
+    /// # let browser = pw.chromium().launch().await?;
+    /// # let page = browser.new_page().await?;
     /// let typeerrors: Vec<_> = page
     ///     .page_errors()
     ///     .into_iter()
     ///     .filter(|e| e.starts_with("TypeError"))
     ///     .collect();
+    /// # Ok(())
+    /// # }
     /// ```
     ///
     /// Use [`clear_page_errors`](Self::clear_page_errors) to drop the
@@ -915,13 +901,6 @@ impl Page {
             other => other,
         })?;
 
-        // Update the page's URL if we got a response
-        if let Some(ref resp) = response
-            && let Ok(mut page_url) = self.url.write()
-        {
-            *page_url = resp.url().to_string();
-        }
-
         if let Some(ref resp) = response {
             tracing::Span::current().record("status", resp.status());
         }
@@ -1077,8 +1056,7 @@ impl Page {
     /// See: <https://playwright.dev/docs/api/class-page#page-locator>
     #[tracing::instrument(level = "debug", skip_all, fields(guid = %self.guid(), selector = %selector))]
     pub async fn locator(&self, selector: &str) -> crate::protocol::Locator {
-        // Get the main frame
-        let frame = self.main_frame().await.expect("Main frame should exist");
+        let frame = self.main_frame_wired();
 
         crate::protocol::Locator::new(Arc::new(frame), selector.to_string(), self.clone())
     }
@@ -1090,7 +1068,7 @@ impl Page {
     /// See: <https://playwright.dev/docs/api/class-page#page-frame-locator>
     #[tracing::instrument(level = "debug", skip_all, fields(guid = %self.guid(), selector = %selector))]
     pub async fn frame_locator(&self, selector: &str) -> crate::protocol::FrameLocator {
-        let frame = self.main_frame().await.expect("Main frame should exist");
+        let frame = self.main_frame_wired();
         crate::protocol::FrameLocator::new(Arc::new(frame), selector.to_string(), self.clone())
     }
 
@@ -1561,10 +1539,6 @@ impl Page {
                 headers,
                 Some(response_arc),
             );
-
-            if let Ok(mut page_url) = self.url.write() {
-                *page_url = response.url().to_string();
-            }
 
             Ok(Some(response))
         } else {
@@ -2156,10 +2130,17 @@ impl Page {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # use playwright_rs::Playwright;
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let pw = Playwright::launch().await?;
+    /// # let browser = pw.chromium().launch().await?;
+    /// # let page = browser.new_page().await?;
     /// page.on_filechooser(|chooser| async move {
     ///     chooser.set_files(&[std::path::PathBuf::from("/tmp/file.txt")]).await
     /// }).await?;
+    /// # Ok(())
+    /// # }
     /// ```
     ///
     /// See: <https://playwright.dev/docs/api/class-page#page-event-file-chooser>
@@ -2207,12 +2188,20 @@ impl Page {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # use playwright_rs::Playwright;
+    /// # use std::path::PathBuf;
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let pw = Playwright::launch().await?;
+    /// # let browser = pw.chromium().launch().await?;
+    /// # let page = browser.new_page().await?;
     /// // Set up waiter BEFORE triggering the file chooser
     /// let waiter = page.expect_file_chooser(None).await?;
     /// page.locator("input[type=file]").await.click(None).await?;
     /// let chooser = waiter.wait().await?;
     /// chooser.set_files(&[PathBuf::from("/tmp/file.txt")]).await?;
+    /// # Ok(())
+    /// # }
     /// ```
     ///
     /// See: <https://playwright.dev/docs/api/class-page#page-wait-for-event>
@@ -3562,7 +3551,7 @@ impl Page {
     /// # Example
     ///
     /// ```no_run
-    /// # use playwright_rs::protocol::{Playwright, AddStyleTagOptions};
+    /// # use playwright_rs::protocol::Playwright;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let playwright = Playwright::launch().await?;
@@ -3710,6 +3699,16 @@ impl Page {
     pub async fn bring_to_front(&self) -> Result<()> {
         self.channel()
             .send_no_result("bringToFront", serde_json::json!({}))
+            .await
+    }
+
+    /// Clears all element highlights drawn by [`Locator::highlight`](crate::protocol::Locator::highlight).
+    ///
+    /// See: <https://playwright.dev/docs/api/class-page#page-hide-highlight>
+    #[tracing::instrument(level = "debug", skip_all, fields(guid = %self.guid()))]
+    pub async fn hide_highlight(&self) -> Result<()> {
+        self.channel()
+            .send_no_result("hideHighlight", serde_json::json!({}))
             .await
     }
 
@@ -4057,7 +4056,7 @@ impl Page {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```no_run
     /// # use playwright_rs::protocol::{Playwright, BrowserContextOptions, Viewport};
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -4095,7 +4094,7 @@ impl Page {
     /// for asserting page-wide accessibility structure without first selecting
     /// `body` explicitly.
     ///
-    /// Pass `Some(AriaSnapshotOptions { mode: Some(AriaSnapshotMode::Ai), .. })`
+    /// Pass `Some(AriaSnapshotOptions::default().mode(AriaSnapshotMode::Ai))`
     /// to get the AI-friendly form intended for LLM/codegen consumption.
     ///
     /// # Note
@@ -4464,13 +4463,7 @@ impl ChannelOwner for Page {
     fn on_event(&self, method: &str, params: Value) {
         match method {
             "navigated" => {
-                // Update URL when page navigates
-                if let Some(url_value) = params.get("url")
-                    && let Some(url_str) = url_value.as_str()
-                    && let Ok(mut url) = self.url.write()
-                {
-                    *url = url_str.to_string();
-                }
+                // The main frame tracks navigation; nothing to update here.
             }
             "route" => {
                 // Handle network routing event
@@ -5051,6 +5044,7 @@ impl std::fmt::Debug for Page {
 
 /// Options for page.goto() and page.reload()
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct GotoOptions {
     /// Maximum operation time in milliseconds
     pub timeout: Option<std::time::Duration>,
@@ -5088,6 +5082,7 @@ impl Default for GotoOptions {
 
 /// When to consider navigation succeeded
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum WaitUntil {
     /// Consider operation to be finished when the `load` event is fired
     Load,
@@ -5114,6 +5109,7 @@ impl WaitUntil {
 ///
 /// See: <https://playwright.dev/docs/api/class-page#page-add-style-tag>
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct AddStyleTagOptions {
     /// Raw CSS content to inject
     pub content: Option<String>,
@@ -5187,6 +5183,7 @@ impl AddStyleTagOptionsBuilder {
 ///
 /// See: <https://playwright.dev/docs/api/class-page#page-add-script-tag>
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct AddScriptTagOptions {
     /// Raw JavaScript content to inject
     pub content: Option<String>,
@@ -5269,6 +5266,7 @@ impl AddScriptTagOptionsBuilder {
 /// See: <https://playwright.dev/docs/api/class-page#page-emulate-media>
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum Media {
     /// Emulate screen media type
     Screen,
@@ -5283,6 +5281,7 @@ pub enum Media {
 ///
 /// See: <https://playwright.dev/docs/api/class-page#page-emulate-media>
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
 pub enum ColorScheme {
     /// Emulate light color scheme
     #[serde(rename = "light")]
@@ -5302,6 +5301,7 @@ pub enum ColorScheme {
 ///
 /// See: <https://playwright.dev/docs/api/class-page#page-emulate-media>
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
 pub enum ReducedMotion {
     /// Emulate reduced motion preference
     #[serde(rename = "reduce")]
@@ -5318,6 +5318,7 @@ pub enum ReducedMotion {
 ///
 /// See: <https://playwright.dev/docs/api/class-page#page-emulate-media>
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
 pub enum ForcedColors {
     /// Emulate active forced colors
     #[serde(rename = "active")]
@@ -5338,6 +5339,7 @@ pub enum ForcedColors {
 ///
 /// See: <https://playwright.dev/docs/api/class-page#page-emulate-media>
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct EmulateMediaOptions {
     /// Media type to emulate (screen, print, or no-override)
     pub media: Option<Media>,
@@ -5431,6 +5433,7 @@ pub struct PdfMargin {
 ///
 /// See: <https://playwright.dev/docs/api/class-page#page-pdf>
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct PdfOptions {
     /// If specified, the PDF will also be saved to this file path.
     pub path: Option<std::path::PathBuf>,
@@ -5920,6 +5923,7 @@ impl std::fmt::Debug for Response {
 ///
 /// See: <https://playwright.dev/docs/api/class-page#page-route-from-har>
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct RouteFromHarOptions {
     /// URL glob pattern — only requests matching this pattern are served from
     /// the HAR file.  All requests are intercepted when omitted.
@@ -5948,10 +5952,29 @@ pub struct RouteFromHarOptions {
     pub update_mode: Option<String>,
 }
 
+impl RouteFromHarOptions {
+    /// Only serve requests matching this URL glob from the HAR.
+    pub fn url(mut self, url: impl Into<String>) -> Self {
+        self.url = Some(url.into());
+        self
+    }
+    /// Behavior for requests not found in the HAR ("abort" or "fallback").
+    pub fn not_found(mut self, not_found: impl Into<String>) -> Self {
+        self.not_found = Some(not_found.into());
+        self
+    }
+    /// Record new entries into the HAR instead of serving from it.
+    pub fn update(mut self, update: bool) -> Self {
+        self.update = Some(update);
+        self
+    }
+}
+
 /// Options for `page.add_locator_handler()`.
 ///
 /// See: <https://playwright.dev/docs/api/class-page#page-add-locator-handler>
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct AddLocatorHandlerOptions {
     /// Whether to keep the page frozen after the handler has been called.
     ///

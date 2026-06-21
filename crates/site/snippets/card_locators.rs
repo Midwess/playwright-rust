@@ -1,4 +1,4 @@
 page.locator("button#save")
     .await
-    .click()
+    .click(None)
     .await?;

@@ -33,7 +33,7 @@ use tracing::Instrument;
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// # use playwright_rs::protocol::Playwright;
 /// # use playwright_rs::api::LaunchOptions;
 /// # use playwright_rs::protocol::BrowserContextOptions;
@@ -391,10 +391,9 @@ impl BrowserType {
             if b {
                 params["ignoreAllDefaultArgs"] = serde_json::json!(true);
             }
-            params
-                .as_object_mut()
-                .expect("params is a JSON object")
-                .remove("ignoreDefaultArgs");
+            if let Some(obj) = params.as_object_mut() {
+                obj.remove("ignoreDefaultArgs");
+            }
         }
 
         // Send launchPersistentContext RPC to server
@@ -541,6 +540,7 @@ impl BrowserType {
             endpoint_url: endpoint_url.to_string(),
             headers: headers_array,
             slow_mo: options.slow_mo,
+            no_defaults: options.no_defaults,
             timeout: options.timeout.unwrap_or(crate::DEFAULT_TIMEOUT_MS),
         };
 
@@ -599,6 +599,8 @@ struct ConnectOverCdpParams {
     headers: Option<Vec<HeaderEntry>>,
     #[serde(rename = "slowMo", skip_serializing_if = "Option::is_none")]
     slow_mo: Option<f64>,
+    #[serde(rename = "noDefaults", skip_serializing_if = "Option::is_none")]
+    no_defaults: Option<bool>,
     timeout: f64,
 }
 

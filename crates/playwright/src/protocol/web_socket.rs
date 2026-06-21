@@ -2,7 +2,7 @@
 //!
 //! # Example
 //!
-//! ```ignore
+//! ```no_run
 //! use playwright_rs::protocol::Playwright;
 //!
 //! #[tokio::main]
@@ -11,21 +11,19 @@
 //!     let browser = playwright.chromium().launch().await?;
 //!     let page = browser.new_page().await?;
 //!
-//!     // Set up the waiter BEFORE the action that opens the WebSocket
-//!     let ws_waiter = page.expect_websocket(None).await?;
+//!     // Register the handler BEFORE the action that opens the WebSocket
+//!     page.on_websocket(|ws| async move {
+//!         println!("WebSocket URL: {}", ws.url());
+//!
+//!         // Wait for the connection to close
+//!         let close_waiter = ws.expect_close(Some(5000.0)).await?;
+//!         close_waiter.wait().await?;
+//!         assert!(ws.is_closed());
+//!         Ok(())
+//!     }).await?;
 //!
 //!     // Navigate to a page that opens a WebSocket
 //!     page.goto("https://example.com/ws-demo", None).await?;
-//!
-//!     let ws = ws_waiter.wait().await?;
-//!     println!("WebSocket URL: {}", ws.url());
-//!
-//!     // Wait for the connection to close
-//!     let close_waiter = ws.expect_close(Some(5000.0)).await?;
-//!     // ... trigger close ...
-//!     close_waiter.wait().await?;
-//!
-//!     assert!(ws.is_closed());
 //!
 //!     browser.close().await?;
 //!     Ok(())

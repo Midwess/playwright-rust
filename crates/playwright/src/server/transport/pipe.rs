@@ -53,7 +53,7 @@ where
 {
     stdin: W,
     stdout: R,
-    message_tx: mpsc::UnboundedSender<JsonValue>,
+    message_tx: mpsc::Sender<JsonValue>,
 }
 
 /// Receive-only part of PipeTransport
@@ -62,7 +62,7 @@ where
     R: AsyncRead + Unpin + Send,
 {
     stdout: R,
-    message_tx: mpsc::UnboundedSender<JsonValue>,
+    message_tx: mpsc::Sender<JsonValue>,
 }
 
 impl<R> PipeTransportReceiver<R>
@@ -130,7 +130,10 @@ where
             let message: JsonValue = serde_json::from_slice(&message_buf)
                 .map_err(|e| Error::ProtocolError(format!("Failed to parse JSON: {}", e)))?;
 
-            if self.message_tx.send(message).is_err() {
+            // Bounded send: if the dispatch loop falls behind, this awaits,
+            // propagating backpressure to the driver instead of buffering
+            // unboundedly.
+            if self.message_tx.send(message).await.is_err() {
                 break;
             }
         }
@@ -144,8 +147,8 @@ where
     W: AsyncWrite + Unpin + Send,
     R: AsyncRead + Unpin + Send,
 {
-    pub fn new(stdin: W, stdout: R) -> (Self, mpsc::UnboundedReceiver<JsonValue>) {
-        let (message_tx, message_rx) = mpsc::unbounded_channel();
+    pub fn new(stdin: W, stdout: R) -> (Self, mpsc::Receiver<JsonValue>) {
+        let (message_tx, message_rx) = mpsc::channel(super::MESSAGE_CHANNEL_CAPACITY);
 
         let transport = Self {
             stdin,

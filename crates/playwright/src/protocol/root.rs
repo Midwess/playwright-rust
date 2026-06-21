@@ -37,7 +37,7 @@ use std::sync::Arc;
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// # use playwright_rs::protocol::Root;
 /// # use playwright_rs::server::connection::ConnectionLike;
 /// # use std::sync::Arc;

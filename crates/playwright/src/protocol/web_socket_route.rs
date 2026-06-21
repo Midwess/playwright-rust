@@ -6,7 +6,7 @@
 //!
 //! # Example
 //!
-//! ```ignore
+//! ```no_run
 //! use playwright_rs::protocol::Playwright;
 //!
 //! #[tokio::main]
@@ -98,6 +98,24 @@ impl WebSocketRoute {
     /// See: <https://playwright.dev/docs/api/class-websocketroute#web-socket-route-url>
     pub fn url(&self) -> &str {
         &self.url
+    }
+
+    /// Returns the WebSocket subprotocols the page requested (the
+    /// `Sec-WebSocket-Protocol` values) when opening this socket. Empty if none
+    /// were requested.
+    ///
+    /// See: <https://playwright.dev/docs/api/class-websocketroute#web-socket-route-protocols>
+    pub fn protocols(&self) -> Vec<String> {
+        self.base
+            .initializer()
+            .get("protocols")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|x| x.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// Connects this WebSocket to the actual server.
@@ -212,6 +230,7 @@ impl WebSocketRoute {
 
 /// Options for [`WebSocketRoute::close`].
 #[derive(Debug, Default, Clone)]
+#[non_exhaustive]
 pub struct WebSocketRouteCloseOptions {
     /// WebSocket close code (e.g. 1000 for normal closure).
     pub code: Option<u16>,

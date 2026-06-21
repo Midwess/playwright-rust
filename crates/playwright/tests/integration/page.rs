@@ -704,7 +704,7 @@ async fn test_page_clock_install_and_fast_forward() {
 
     // Install fake timers then pause at a known epoch to get deterministic time
     clock
-        .install(Some(ClockInstallOptions { time: Some(0) }))
+        .install(Some(ClockInstallOptions::default().time(0)))
         .await
         .expect("Failed to install clock");
 
@@ -776,6 +776,33 @@ async fn test_context_clock_matches_page_clock() {
         .resume()
         .await
         .expect("resume() should succeed after set_fixed_time");
+
+    browser.close().await.expect("Failed to close browser");
+}
+
+#[tokio::test]
+async fn test_frame_clears_page_backref_on_close() {
+    let (_playwright, browser, page) = crate::common::setup().await;
+
+    let frame = page.main_frame().await.expect("main frame");
+    assert!(frame.page().is_some(), "live frame should know its page");
+
+    page.close().await.expect("close page");
+
+    // The server's __dispose__ for the frame arrives asynchronously after
+    // close() resolves; poll briefly rather than asserting immediately.
+    let mut cleared = false;
+    for _ in 0..100 {
+        if frame.page().is_none() {
+            cleared = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(
+        cleared,
+        "frame should drop its Page back-reference on dispose (breaks the Page<->Frame Arc cycle)"
+    );
 
     browser.close().await.expect("Failed to close browser");
 }

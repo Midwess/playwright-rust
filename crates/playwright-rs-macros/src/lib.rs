@@ -36,8 +36,8 @@ use syn::{LitStr, parse_macro_input};
 ///
 /// # Example
 ///
-/// ```ignore
-/// use playwright_rs::locator;
+/// ```no_run
+/// use playwright_rs_macros::locator;
 ///
 /// let _ok = locator!("#submit");
 /// let _ok = locator!("text=Hello");

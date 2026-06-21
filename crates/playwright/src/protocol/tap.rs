@@ -13,7 +13,7 @@ use crate::protocol::click::{KeyboardModifier, Position};
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use playwright_rs::TapOptions;
 ///
 /// // Tap with force (bypass actionability checks)
@@ -29,6 +29,7 @@ use crate::protocol::click::{KeyboardModifier, Position};
 ///
 /// See: <https://playwright.dev/docs/api/class-locator#locator-tap>
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct TapOptions {
     /// Whether to bypass actionability checks
     pub force: Option<bool>,

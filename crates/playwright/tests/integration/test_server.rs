@@ -51,6 +51,7 @@ impl TestServer {
             .route("/all_texts.html", get(all_texts_page))
             .route("/echo-headers", get(echo_headers_page))
             .route("/drag_drop.html", get(drag_drop_page))
+            .route("/external_drop.html", get(external_drop_page))
             .route("/wait_for.html", get(wait_for_page))
             .route("/api/data.json", get(json_data_endpoint))
             .route("/slow.html", get(slow_page))
@@ -712,6 +713,41 @@ async fn drag_drop_page() -> Response<Body> {
       e.preventDefault();
       target.classList.add('dropped');
       result.textContent = 'dropped';
+    });
+  </script>
+</body>
+</html>"#,
+        ))
+        .unwrap()
+}
+
+/// A drop zone that reports what was dropped onto it (external drag-and-drop),
+/// used to test `Locator::drop` with files and/or MIME-typed data.
+async fn external_drop_page() -> Response<Body> {
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "text/html")
+        .body(Body::from(
+            r#"<!DOCTYPE html>
+<html>
+<head><title>External Drop Test</title></head>
+<body>
+  <div id="zone" style="width:200px;height:200px;border:2px dashed #666">Drop here</div>
+  <div id="result">none</div>
+  <script>
+    var zone = document.getElementById('zone');
+    var result = document.getElementById('result');
+    zone.addEventListener('dragover', function(e) { e.preventDefault(); });
+    zone.addEventListener('drop', function(e) {
+      e.preventDefault();
+      var dt = e.dataTransfer;
+      var parts = [];
+      if (dt.files) {
+        for (var i = 0; i < dt.files.length; i++) parts.push('file:' + dt.files[i].name);
+      }
+      var text = dt.getData('text/plain');
+      if (text) parts.push('text:' + text);
+      result.textContent = parts.length ? parts.join('|') : 'empty';
     });
   </script>
 </body>

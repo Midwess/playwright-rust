@@ -292,12 +292,10 @@ async fn test_tracing_start_with_options() {
 
     // Start tracing with name and screenshot options
     use playwright_rs::protocol::TracingStartOptions;
-    let options = TracingStartOptions {
-        name: Some("test-trace".to_string()),
-        screenshots: Some(true),
-        snapshots: Some(true),
-        ..Default::default()
-    };
+    let options = TracingStartOptions::default()
+        .name("test-trace")
+        .screenshots(true)
+        .snapshots(true);
 
     tracing
         .start(Some(options))
@@ -337,12 +335,10 @@ async fn test_tracing_stop_with_path() {
 
     // Start tracing with snapshots so there's data to save
     use playwright_rs::protocol::TracingStartOptions;
-    let start_options = TracingStartOptions {
-        name: Some("path-test-trace".to_string()),
-        screenshots: Some(false),
-        snapshots: Some(true),
-        ..Default::default()
-    };
+    let start_options = TracingStartOptions::default()
+        .name("path-test-trace")
+        .screenshots(false)
+        .snapshots(true);
 
     tracing
         .start(Some(start_options))
@@ -367,9 +363,7 @@ async fn test_tracing_stop_with_path() {
     ));
 
     use playwright_rs::protocol::TracingStopOptions;
-    let stop_options = TracingStopOptions {
-        path: Some(temp_path.to_str().unwrap().to_string()),
-    };
+    let stop_options = TracingStopOptions::default().path(temp_path.to_str().unwrap());
 
     tracing
         .stop(Some(stop_options))
@@ -405,12 +399,11 @@ async fn test_tracing_start_with_live_option() {
     //   1. The option is accepted (no protocol error)
     //   2. A recording with `live: true` still produces a valid trace file
     use playwright_rs::protocol::{TracingStartOptions, TracingStopOptions};
-    let start_options = TracingStartOptions {
-        name: Some("live-trace".to_string()),
-        screenshots: Some(true),
-        snapshots: Some(true),
-        live: Some(true),
-    };
+    let start_options = TracingStartOptions::default()
+        .name("live-trace")
+        .screenshots(true)
+        .snapshots(true)
+        .live(true);
 
     tracing
         .start(Some(start_options))
@@ -432,9 +425,7 @@ async fn test_tracing_start_with_live_option() {
             .as_nanos()
     ));
 
-    let stop_options = TracingStopOptions {
-        path: Some(temp_path.to_str().unwrap().to_string()),
-    };
+    let stop_options = TracingStopOptions::default().path(temp_path.to_str().unwrap());
 
     tracing
         .stop(Some(stop_options))
@@ -502,5 +493,66 @@ async fn test_tracing_multiple_start_stop_cycles() {
 
     context.close().await.expect("Failed to close context");
     browser.close().await.expect("Failed to close browser");
+    drop(playwright);
+}
+
+#[tokio::test]
+async fn test_tracing_har_records_network() {
+    use playwright_rs::protocol::StartHarOptions;
+
+    let server = crate::test_server::TestServer::start().await;
+    let (playwright, browser, context) = crate::common::setup_context().await;
+    let tracing = context
+        .tracing()
+        .await
+        .expect("Failed to get tracing object");
+
+    let har_path = std::env::temp_dir().join(format!(
+        "pw-rust-har-{}.har",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+
+    tracing
+        .start_har(har_path.to_str().unwrap(), Some(StartHarOptions::default()))
+        .await
+        .expect("Failed to start HAR recording");
+
+    let page = context.new_page().await.expect("Failed to create page");
+    page.goto(&format!("{}/locators.html", server.url()), None)
+        .await
+        .expect("Failed to navigate");
+
+    tracing
+        .stop_har()
+        .await
+        .expect("Failed to stop HAR recording");
+
+    // A HAR is a JSON document with `log.entries`. The navigated document must
+    // appear among the recorded requests.
+    let content = std::fs::read_to_string(&har_path).expect("HAR file should be written");
+    let har: serde_json::Value = serde_json::from_str(&content).expect("HAR should be valid JSON");
+    let entries = har["log"]["entries"]
+        .as_array()
+        .expect("HAR should have log.entries");
+    assert!(
+        !entries.is_empty(),
+        "HAR should record at least the document request"
+    );
+    let urls: Vec<&str> = entries
+        .iter()
+        .filter_map(|e| e["request"]["url"].as_str())
+        .collect();
+    assert!(
+        urls.iter().any(|u| u.contains("locators.html")),
+        "HAR should include the navigated document, got {urls:?}"
+    );
+
+    let _ = std::fs::remove_file(&har_path);
+    context.close().await.expect("Failed to close context");
+    browser.close().await.expect("Failed to close browser");
+    server.shutdown();
     drop(playwright);
 }

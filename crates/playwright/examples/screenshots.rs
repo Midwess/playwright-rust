@@ -3,7 +3,9 @@
 // Run with:
 //   cargo run --package playwright-rs --example screenshots
 
-use playwright_rs::protocol::{Playwright, ScreenshotClip, ScreenshotOptions, ScreenshotType};
+use playwright_rs::protocol::{
+    Animations, Caret, Playwright, Scale, ScreenshotClip, ScreenshotOptions, ScreenshotType,
+};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -57,6 +59,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let file_path = temp_dir.join("playwright_example_screenshot.png");
     page.screenshot_to_file(&file_path, None).await?;
     println!("✓ Screenshot saved to: {}", file_path.display());
+
+    // Example 7: Stable capture — freeze CSS animations, hide the text caret,
+    // and capture at device-pixel scale (all new in Playwright 1.60).
+    let stable = ScreenshotOptions::builder()
+        .animations(Animations::Disabled)
+        .caret(Caret::Hide)
+        .scale(Scale::Device)
+        .build();
+    let stable_bytes = page.screenshot(Some(stable)).await?;
+    println!(
+        "✓ Stable screenshot (animations off, caret hidden, device scale): {} bytes",
+        stable_bytes.len()
+    );
+
+    // Example 8: Inject CSS before capturing (e.g. hide flaky/dynamic elements).
+    let styled = ScreenshotOptions::builder()
+        .style("h1 { visibility: hidden; }")
+        .build();
+    let styled_bytes = page.screenshot(Some(styled)).await?;
+    println!(
+        "✓ Screenshot with injected CSS: {} bytes",
+        styled_bytes.len()
+    );
+
+    // Example 9: Mask elements — overpaint matched locators with a solid box to
+    // redact dynamic or sensitive content.
+    let masked = ScreenshotOptions::builder()
+        .mask(vec![page.locator("h1").await])
+        .mask_color("#FF00FF")
+        .build();
+    let masked_bytes = page.screenshot(Some(masked)).await?;
+    println!(
+        "✓ Masked screenshot (h1 redacted): {} bytes",
+        masked_bytes.len()
+    );
 
     // Cleanup
     browser.close().await?;

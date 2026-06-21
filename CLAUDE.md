@@ -41,8 +41,9 @@ their domain:
 - **supply-chain** — `cargo audit` / `cargo deny` / `cargo vet`
   workflow. Read before bumping our own version, before resolving a
   dependabot PR's vet failures, or when a `RUSTSEC-*` advisory drops.
-- **doctest-conventions** — module-level doctests with `ignore`
-  annotation. Read before authoring or modifying rustdoc examples.
+- **doctest-conventions** — `no_run` doctests with hidden scaffolding;
+  compile-checked everywhere. Read before authoring or modifying
+  rustdoc examples.
 - **release-process** — end-to-end release runbook including the
   push-commit-then-wait-for-CI-then-tag pattern. Read before driving
   a release manually.
@@ -100,6 +101,11 @@ Just-in-time philosophy — write the right thing in the right file:
 - Locators auto-wait for elements; assertions auto-retry — see the
   expect API (`crate::assertions`)
 - No unsafe code without a `// SAFETY:` justification
+- No `unwrap()`/`expect()` on fallible paths reachable from public
+  APIs — return an `Error` variant. Two sanctioned exceptions:
+  `std::sync` lock acquisition (poisoning means another thread already
+  panicked; propagating that panic is the policy) and invariants
+  guaranteed by construction (comment why at the call site)
 
 ## Testing
 
@@ -107,7 +113,9 @@ Just-in-time philosophy — write the right thing in the right file:
   server lifecycle (in `crates/playwright/src/`)
 - **Integration tests** — end-to-end API exercising real browsers
   (`crates/playwright/tests/integration/`); use `common::setup()` /
-  `common::setup_context()` helpers
+  `common::setup_context()` helpers. To wait for an event/state change,
+  use `common::poll_until(timeout, cond)` — never a fixed
+  `tokio::time::sleep` before an assertion (flakes on loaded CI)
 - **Doctests** — see the **doctest-conventions** skill
 - **CI** runs Linux, macOS, Windows with Chromium + Firefox + WebKit
 
@@ -119,9 +127,8 @@ cargo nextest run                           # all tests
 cargo nextest run -p playwright-rs --lib    # unit tests only (~2s, no browsers)
 cargo nextest run -p playwright-rs -E 'test(locator)'
 
-# Doctests (nextest does not run these)
-cargo test --doc                            # compile-only (pre-commit)
-cargo test --doc --workspace -- --ignored   # full execution (CI)
+# Doctests (nextest does not run these; no_run = compile-only by design)
+cargo test --doc --workspace                # pre-commit and CI run exactly this
 
 # Examples
 cargo run --package playwright-rs --example basic

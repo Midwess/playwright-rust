@@ -40,10 +40,14 @@ see docs.rs for the full list) and chain action / assertion methods.
 
 - **`Result<T>` and `async/await` on `tokio`.** One error type:
   `playwright_rs::Error`. Use `?` to propagate.
-- **Builders for option-heavy methods.** `goto`, `click`, `screenshot`,
-  `fill`, `tracing().start`, etc. take an `Options` struct constructed
-  with `..Default::default()`. The exact field names live on docs.rs;
-  don't memorize them.
+- **Builders / setters for option-heavy methods.** `goto`, `click`,
+  `screenshot`, `fill`, `tracing().start`, etc. take an `Options`
+  struct. These are `#[non_exhaustive]` (so upstream option additions
+  stay non-breaking) — struct literals won't compile. Construct with
+  the type's `builder()` where it has one, otherwise chain setters off
+  `Default`/`new()`: `GetByRoleOptions::default().name("OK").exact(true)`,
+  `Cookie::new(name, value).domain("example.com")`. The exact method
+  names live on docs.rs; don't memorize them.
 - **Auto-wait + auto-retry.** Locator-based actions wait until the
   element is actionable; `expect()` assertions retry until they hold
   or time out. **Never insert `tokio::time::sleep` between an action
@@ -83,6 +87,33 @@ async fn login_flow() -> Result<()> {
     Ok(())
 }
 ```
+
+## Capabilities worth reaching for
+
+Concept-level pointers; the exact options live on docs.rs.
+
+- **Stable / redacted screenshots.** `ScreenshotOptions` carries
+  `animations(Disabled)` for flake-free shots (freeze CSS animations
+  before capture) and `mask`/`mask_color` to overpaint dynamic or
+  sensitive elements. Reach for `animations(Disabled)` whenever a
+  screenshot races an animation.
+- **Context-level events.** Beyond per-page handlers, `BrowserContext`
+  observes activity across *all* its pages — `on_download`,
+  `on_page_load` / `on_page_close`,
+  `on_frame_attached` / `_detached` / `_navigated` — and
+  `Browser::on_context` fires for each new context. Use these for
+  multi-tab fixtures instead of wiring every page individually.
+- **HAR network capture.** `tracing().start_har(path, ..)` /
+  `stop_har()` records all network traffic to a HAR — inspect it in
+  browser devtools or replay it deterministically with
+  `route_from_har`. A sibling to trace capture.
+- **External drag-and-drop.** `Locator::drop` simulates dragging files
+  or data in from outside the page (upload zones), distinct from
+  `drag_to`, which drags one element onto another within the page.
+- **Accessibility-tree assertions.** `expect_page(&page)
+  .to_match_aria_snapshot(..)` (and the locator form) guard the page's
+  ARIA structure as a regression check; `aria_snapshot` can emit
+  `[box=..]` bounding boxes for visual/agent reasoning.
 
 ## Debugging failures with traces
 

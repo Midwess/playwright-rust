@@ -22,7 +22,6 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
-use tracing::Instrument;
 
 /// Type alias for the children registry mapping GUIDs to ChannelOwner objects
 type ChildrenRegistry = HashMap<Arc<str>, Arc<dyn ChannelOwner>>;
@@ -66,7 +65,7 @@ pub enum ParentOrConnection {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// # use playwright_rs::server::channel_owner::ChannelOwner;
 /// # use std::sync::Arc;
 /// # fn example(browser: Arc<dyn ChannelOwner>) {
@@ -160,7 +159,7 @@ pub trait ChannelOwner: Send + Sync {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use playwright_rs::server::channel_owner::{ChannelOwner, ChannelOwnerImpl, ParentOrConnection, DisposeReason};
 /// use playwright_rs::server::channel::Channel;
 /// use playwright_rs::server::connection::ConnectionLike;
@@ -325,15 +324,11 @@ impl ChannelOwnerImpl {
             parent.remove_child(&self.guid);
         }
 
-        // Remove from connection (spawn to avoid blocking in sync context)
-        let connection = self.connection.clone();
-        let guid = Arc::clone(&self.guid);
-        tokio::spawn(
-            async move {
-                connection.unregister_object(&guid).await;
-            }
-            .in_current_span(),
-        );
+        // Remove from connection immediately. The registry lock is
+        // synchronous, so no task spawn is needed; unregistering inline
+        // closes the window where a disposed object could still receive
+        // events (and keeps dispose() usable without a tokio runtime).
+        self.connection.unregister_object_sync(&self.guid);
 
         // Dispose all children (snapshot to avoid holding lock)
         let children: Vec<_> = {

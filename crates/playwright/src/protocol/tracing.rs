@@ -15,7 +15,7 @@
 //!
 //! # Example
 //!
-//! ```ignore
+//! ```no_run
 //! use playwright_rs::protocol::{Playwright, TracingStartOptions};
 //!
 //! #[tokio::main]
@@ -24,24 +24,21 @@
 //!     let browser = playwright.chromium().launch().await?;
 //!     let context = browser.new_context().await?;
 //!
-//!     let tracing = context.tracing()?;
+//!     let tracing = context.tracing().await?;
 //!
 //!     // Start tracing with options
-//!     tracing.start(Some(TracingStartOptions {
-//!         name: Some("my-trace".to_string()),
-//!         screenshots: Some(true),
-//!         snapshots: Some(true),
-//!         ..Default::default()
-//!     })).await?;
+//!     tracing.start(Some(TracingStartOptions::default()
+//!         .name("my-trace")
+//!         .screenshots(true)
+//!         .snapshots(true))).await?;
 //!
 //!     let page = context.new_page().await?;
 //!     page.goto("https://example.com", None).await?;
 //!
 //!     // Stop and save the trace
 //!     use playwright_rs::protocol::TracingStopOptions;
-//!     tracing.stop(Some(TracingStopOptions {
-//!         path: Some("/tmp/trace.zip".to_string()),
-//!     })).await?;
+//!     tracing.stop(Some(TracingStopOptions::default()
+//!         .path("/tmp/trace.zip"))).await?;
 //!
 //!     context.close().await?;
 //!     browser.close().await?;
@@ -52,6 +49,7 @@
 //! See: <https://playwright.dev/docs/api/class-tracing>
 
 use crate::error::Result;
+use crate::protocol::har_options::StartHarOptions;
 use crate::server::channel::Channel;
 use crate::server::channel_owner::{
     ChannelOwner, ChannelOwnerImpl, DisposeReason, ParentOrConnection,
@@ -65,6 +63,7 @@ use std::sync::Arc;
 ///
 /// See: <https://playwright.dev/docs/api/class-tracing#tracing-start>
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct TracingStartOptions {
     /// Custom name for the trace. Shown in trace viewer as the trace title.
     pub name: Option<String>,
@@ -82,14 +81,53 @@ pub struct TracingStartOptions {
     pub live: Option<bool>,
 }
 
+impl TracingStartOptions {
+    /// Trace name (affects file naming in the traces directory).
+    pub fn name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+    /// Capture screenshots during tracing.
+    pub fn screenshots(mut self, screenshots: bool) -> Self {
+        self.screenshots = Some(screenshots);
+        self
+    }
+    /// Capture DOM snapshots during tracing.
+    pub fn snapshots(mut self, snapshots: bool) -> Self {
+        self.snapshots = Some(snapshots);
+        self
+    }
+    /// Enable live tracing (view in the trace viewer while running).
+    pub fn live(mut self, live: bool) -> Self {
+        self.live = Some(live);
+        self
+    }
+}
+
 /// Options for stopping a trace recording.
 ///
 /// See: <https://playwright.dev/docs/api/class-tracing#tracing-stop>
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct TracingStopOptions {
     /// Path to export the trace file to. If not provided, the trace is discarded.
     /// The file is written as a `.zip` archive.
     pub path: Option<String>,
+}
+
+impl TracingStopOptions {
+    /// Export the trace to the given path.
+    pub fn path(mut self, path: impl Into<String>) -> Self {
+        self.path = Some(path.into());
+        self
+    }
+}
+
+/// In-flight HAR recording state, captured by `start_har` for `stop_har`.
+struct HarRecording {
+    har_id: Option<String>,
+    path: String,
+    resources_dir: Option<String>,
 }
 
 /// Tracing — records Playwright traces for debugging and inspection.
@@ -102,6 +140,10 @@ pub struct TracingStopOptions {
 #[derive(Clone)]
 pub struct Tracing {
     base: ChannelOwnerImpl,
+    /// Shared across clones so `start_har`/`stop_har` on the same context's
+    /// `Tracing` see one recording. `stop_har` takes no path (matching the
+    /// upstream API), so the path and `harId` are stashed here at start.
+    har: Arc<parking_lot::Mutex<Option<HarRecording>>>,
 }
 
 impl Tracing {
@@ -116,6 +158,7 @@ impl Tracing {
     ) -> Result<Self> {
         Ok(Self {
             base: ChannelOwnerImpl::new(parent, type_name, guid, initializer),
+            har: Arc::new(parking_lot::Mutex::new(None)),
         })
     }
 
@@ -232,6 +275,118 @@ impl Tracing {
             .await?;
 
         artifact.save_as(dest_path).await
+    }
+
+    /// Start recording a HAR (HTTP Archive) of network traffic to `path`.
+    ///
+    /// The HAR is written when [`stop_har`](Self::stop_har) is called. A `.zip`
+    /// path bundles resource bodies as separate entries (`Attach`); a plain
+    /// path inlines them (`Embed`). The recorded HAR can be opened in browser
+    /// devtools or replayed in tests via `route_from_har`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if communication with the browser process fails.
+    ///
+    /// See: <https://playwright.dev/docs/api/class-tracing#tracing-start-har>
+    #[tracing::instrument(level = "info", skip_all, fields(guid = %self.guid()))]
+    pub async fn start_har(
+        &self,
+        path: impl Into<String>,
+        options: Option<StartHarOptions>,
+    ) -> Result<()> {
+        let path = path.into();
+        let opts = options.unwrap_or_default();
+        let rec_options = opts.to_record_har_json(&path);
+
+        let result: Value = self
+            .channel()
+            .send("harStart", serde_json::json!({ "options": rec_options }))
+            .await?;
+        let har_id = result
+            .get("harId")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned);
+
+        *self.har.lock() = Some(HarRecording {
+            har_id,
+            path,
+            resources_dir: opts.resources_dir,
+        });
+        Ok(())
+    }
+
+    /// Stop the HAR recording started by [`start_har`](Self::start_har) and
+    /// write it to the path given there.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `start_har` was not called first, or if
+    /// communication with the browser process fails.
+    ///
+    /// See: <https://playwright.dev/docs/api/class-tracing#tracing-stop-har>
+    #[tracing::instrument(level = "info", skip_all, fields(guid = %self.guid()))]
+    pub async fn stop_har(&self) -> Result<()> {
+        let Some(recording) = self.har.lock().take() else {
+            return Err(crate::error::Error::InvalidArgument(
+                "stop_har called without a matching start_har".to_string(),
+            ));
+        };
+
+        let mut params = serde_json::json!({ "mode": "archive" });
+        if let Some(id) = &recording.har_id {
+            params["harId"] = Value::String(id.clone());
+        }
+
+        let result: Value = self.channel().send("harExport", params).await?;
+
+        let Some(artifact_guid) = result
+            .get("artifact")
+            .and_then(|a| a.get("guid"))
+            .and_then(|g| g.as_str())
+        else {
+            return Ok(());
+        };
+
+        // harExport always yields a zip archive. A `.zip` destination takes it
+        // verbatim; any other path gets the `.har` JSON extracted out of it.
+        if recording.path.ends_with(".zip") {
+            self.save_artifact(artifact_guid, &recording.path).await?;
+        } else {
+            let tmp_zip = format!("{}.tmp.zip", recording.path);
+            self.save_artifact(artifact_guid, &tmp_zip).await?;
+            let local_utils = self.find_local_utils()?;
+            local_utils
+                .har_unzip(
+                    &tmp_zip,
+                    &recording.path,
+                    recording.resources_dir.as_deref(),
+                )
+                .await?;
+            let _ = std::fs::remove_file(&tmp_zip);
+        }
+
+        Ok(())
+    }
+
+    /// Locate the connection's `LocalUtils` (used to extract a `.har` from the
+    /// exported zip archive).
+    fn find_local_utils(&self) -> Result<crate::protocol::LocalUtils> {
+        let connection = self.connection();
+        connection
+            .all_objects_sync()
+            .into_iter()
+            .find(|o| o.type_name() == "LocalUtils")
+            .and_then(|o| {
+                o.as_any()
+                    .downcast_ref::<crate::protocol::LocalUtils>()
+                    .cloned()
+            })
+            .ok_or_else(|| {
+                crate::error::Error::ProtocolError(
+                    "stop_har: LocalUtils not found in connection registry".to_string(),
+                )
+            })
     }
 }
 

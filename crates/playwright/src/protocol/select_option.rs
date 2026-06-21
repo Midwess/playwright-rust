@@ -8,7 +8,7 @@
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use playwright_rs::protocol::SelectOption;
 ///
 /// // Select by value
@@ -23,6 +23,7 @@
 ///
 /// See: <https://playwright.dev/docs/api/class-locator#locator-select-option>
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum SelectOption {
     /// Select by option value attribute
     Value(String),

@@ -21,10 +21,13 @@ pub fn Hero() -> impl IntoView {
                 "already know from Python, Java, and .NET."
             </p>
             <p id="unofficial" class="mt-3 text-xs text-rust-50/50">
-                "Unofficial, community-maintained bindings for Microsoft Playwright."
+                "Unofficial, community-maintained Rust bindings for Microsoft Playwright."
             </p>
 
-            <div class="mt-7 flex flex-wrap items-center justify-center gap-2">
+            <div
+                id="hero-badges"
+                class="mt-7 flex flex-wrap items-center justify-center gap-2"
+            >
                 <a href=CRATES_IO>
                     <img alt="crates.io" src="https://img.shields.io/crates/v/playwright-rs.svg"/>
                 </a>

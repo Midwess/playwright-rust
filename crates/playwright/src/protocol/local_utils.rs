@@ -85,12 +85,28 @@ impl LocalUtils {
             .send_no_result("harClose", serde_json::json!({ "harId": har_id }))
             .await
     }
+
+    /// Extracts the `.har` JSON (and any attached resources) from a HAR `.zip`
+    /// archive into `har_file`. Used when exporting a HAR to a non-`.zip` path.
+    pub async fn har_unzip(
+        &self,
+        zip_file: &str,
+        har_file: &str,
+        resources_dir: Option<&str>,
+    ) -> Result<()> {
+        let mut params = serde_json::json!({ "zipFile": zip_file, "harFile": har_file });
+        if let Some(dir) = resources_dir {
+            params["resourcesDir"] = serde_json::json!(dir);
+        }
+        self.channel().send_no_result("harUnzip", params).await
+    }
 }
 
 /// Result from a `harLookup` RPC call.
 ///
 /// Describes whether the request was found in the HAR and how to respond.
 #[derive(Debug, Deserialize)]
+#[non_exhaustive]
 pub struct HarLookupResult {
     /// Action to take: `"fulfill"`, `"redirect"`, `"fallback"`, or `"error"`.
     pub action: String,

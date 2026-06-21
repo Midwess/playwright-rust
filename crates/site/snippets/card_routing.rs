@@ -1,3 +1,3 @@
 page.route("**/*.png", |route| async move {
-    route.abort().await
+    route.abort(None).await
 }).await?;

@@ -33,7 +33,7 @@ jobs:
       # decoupling in build.rs); shared by the playwright-rs CLI and site-e2e.
       PLAYWRIGHT_DRIVER_CACHE_DIR: ${{ github.workspace }}/.playwright-driver
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -84,8 +84,15 @@ jobs:
       - name: Dogfood test (deploy gate)
         run: cargo test --manifest-path crates/site-e2e/Cargo.toml
 
+      # The gate writes fresh receipts into public/receipts/; copy them into the
+      # built dist/ (the build before the test had none) for the deploy.
+      - name: Stage receipts into the artifact
+        run: |
+          rm -rf crates/site/dist/receipts
+          cp -r crates/site/public/receipts crates/site/dist/receipts
+
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: crates/site/dist
 
@@ -99,4 +106,4 @@ jobs:
     steps:
       - name: Deploy
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

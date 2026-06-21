@@ -11,7 +11,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::any::Any;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 
 /// Request represents an HTTP request during navigation.
 ///
@@ -30,9 +30,17 @@ pub struct Request {
     /// Eagerly resolved Frame back-reference from the initializer's `frame.guid`.
     frame: Arc<Mutex<Option<crate::protocol::Frame>>>,
     /// The request that redirected to this one (from initializer `redirectedFrom`).
-    redirected_from: Arc<Mutex<Option<Request>>>,
+    ///
+    /// Stored as a `Weak` back-reference. The connection's object registry is the
+    /// sole strong owner of every Request, so the redirect chain must not keep its
+    /// peers alive: a strong `redirected_from` + `redirected_to` pair forms a
+    /// reference cycle that `Arc` can never reclaim (Rust has no tracing GC), so
+    /// both Requests and their JSON initializers leak for the life of the
+    /// connection. Mirrors `ChannelOwnerImpl::parent`, which is likewise `Weak`.
+    redirected_from: Arc<Mutex<Option<Weak<dyn ChannelOwner>>>>,
     /// The request that this one redirected to (set by the later request's construction).
-    redirected_to: Arc<Mutex<Option<Request>>>,
+    /// `Weak` for the same cycle-avoidance reason as `redirected_from`.
+    redirected_to: Arc<Mutex<Option<Weak<dyn ChannelOwner>>>>,
     /// The Response that has been received for this request, if any.
     /// Set when the `ResponseObject` for this request is constructed.
     response: Arc<Mutex<Option<crate::protocol::page::Response>>>,
@@ -84,7 +92,7 @@ impl Request {
     ///
     /// See: <https://playwright.dev/docs/api/class-request#request-redirected-from>
     pub fn redirected_from(&self) -> Option<Request> {
-        self.redirected_from.lock().unwrap().clone()
+        upgrade_redirect(&self.redirected_from)
     }
 
     /// Returns the request that this one redirected to, or `None`.
@@ -94,19 +102,24 @@ impl Request {
     ///
     /// See: <https://playwright.dev/docs/api/class-request#request-redirected-to>
     pub fn redirected_to(&self) -> Option<Request> {
-        self.redirected_to.lock().unwrap().clone()
+        upgrade_redirect(&self.redirected_to)
     }
 
     /// Sets the redirect-from back-pointer. Called by the object factory
     /// when a new Request has `redirectedFrom` in its initializer.
-    pub(crate) fn set_redirected_from(&self, from: Request) {
-        *self.redirected_from.lock().unwrap() = Some(from);
+    ///
+    /// Takes the peer's `Arc<dyn ChannelOwner>` (owned by the registry) and stores
+    /// only a `Weak` reference, so the redirect link never extends the peer's
+    /// lifetime — see the field docs for the cycle it would otherwise create.
+    pub(crate) fn set_redirected_from(&self, from: &Arc<dyn ChannelOwner>) {
+        *self.redirected_from.lock().unwrap() = Some(Arc::downgrade(from));
     }
 
     /// Sets the redirect-to forward pointer. Called as a side-effect when
-    /// the redirect target request is constructed.
-    pub(crate) fn set_redirected_to(&self, to: Request) {
-        *self.redirected_to.lock().unwrap() = Some(to);
+    /// the redirect target request is constructed. Stores a `Weak` reference
+    /// for the same cycle-avoidance reason as [`set_redirected_from`](Self::set_redirected_from).
+    pub(crate) fn set_redirected_to(&self, to: &Arc<dyn ChannelOwner>) {
+        *self.redirected_to.lock().unwrap() = Some(Arc::downgrade(to));
     }
 
     /// Returns the [`Response`](crate::protocol::page::Response) if it has already been received,
@@ -622,4 +635,17 @@ impl std::fmt::Debug for Request {
             .field("guid", &self.guid())
             .finish()
     }
+}
+
+/// Upgrades a `Weak` redirect back-reference to a concrete [`Request`] handle.
+///
+/// Returns `None` when the peer Request has already been disposed (its registry
+/// entry dropped) — matching the official clients, which also cannot return a
+/// garbage-collected redirect peer.
+fn upgrade_redirect(slot: &Arc<Mutex<Option<Weak<dyn ChannelOwner>>>>) -> Option<Request> {
+    slot.lock()
+        .unwrap()
+        .as_ref()
+        .and_then(Weak::upgrade)
+        .and_then(|owner| owner.as_any().downcast_ref::<Request>().cloned())
 }

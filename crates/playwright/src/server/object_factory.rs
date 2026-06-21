@@ -186,16 +186,21 @@ pub async fn create_object(
                 request.set_frame(frame);
             }
 
-            // Eagerly resolve the redirect chain from initializer["redirectedFrom"]["guid"]
+            // Eagerly resolve the redirect chain from initializer["redirectedFrom"]["guid"].
+            // The links are stored as `Weak` (see Request's field docs), so resolve the
+            // peer's registry `Arc` here and hand both setters the owning trait object to
+            // downgrade — never a strong handle.
             if let Some(from_guid) = initializer
                 .get("redirectedFrom")
                 .and_then(|v| v.get("guid"))
                 .and_then(|v| v.as_str())
-                && let Ok(from_request) = request.connection().get_typed::<Request>(from_guid).await
+                && let Ok(from_owner) = request.connection().get_object(from_guid).await
+                && let Some(from_request) = from_owner.as_any().downcast_ref::<Request>()
             {
-                request.set_redirected_from(from_request.clone());
+                let request_owner: Arc<dyn ChannelOwner> = request.clone();
+                request.set_redirected_from(&from_owner);
                 // Set the reverse pointer on the original request
-                from_request.set_redirected_to((*request).clone());
+                from_request.set_redirected_to(&request_owner);
             }
 
             request

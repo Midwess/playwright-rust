@@ -452,6 +452,27 @@ impl Connection {
 
         tracing::debug!("Message loop ended (transport closed)");
         let _ = transport_handle.await;
+
+        // The registry and its objects form a strong reference cycle:
+        // `objects` holds `Arc<dyn ChannelOwner>` and every object holds an
+        // `Arc<dyn ConnectionLike>` back to this connection. The server can
+        // no longer send `__dispose__` for anything once the transport is
+        // closed, so without this drain a closed connection would keep its
+        // entire object graph (objects + cloned initializers + the
+        // connection itself) resident forever — one leaked graph per
+        // browser session for long-lived processes that churn sessions.
+        use crate::server::channel_owner::DisposeReason;
+        let orphans: Vec<Arc<dyn ChannelOwner>> = {
+            let mut objects = self.objects.lock();
+            objects.drain().map(|(_, object)| object).collect()
+        };
+        tracing::debug!(
+            "Disposing {} orphaned objects after transport close",
+            orphans.len()
+        );
+        for object in orphans {
+            object.dispose(DisposeReason::GarbageCollected);
+        }
     }
 
     #[cfg(test)]
@@ -701,5 +722,99 @@ impl ConnectionLike for Connection {
 
     fn selectors(&self) -> Arc<Selectors> {
         Arc::clone(&self.selectors)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::time::Duration;
+
+    struct StubSender;
+
+    impl TransportSender for StubSender {
+        fn send(
+            &mut self,
+            _message: Value,
+        ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    struct StubReceiver;
+
+    impl TransportReceiver for StubReceiver {
+        fn run(&mut self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    fn create_event(parent_guid: &str, type_name: &str, guid: &str) -> Value {
+        json!({
+            "guid": parent_guid,
+            "method": "__create__",
+            "params": {
+                "type": type_name,
+                "guid": guid,
+                "initializer": { "name": "chromium", "executablePath": "" }
+            }
+        })
+    }
+
+    /// Locks the transport-close cleanup: the registry and its objects form a
+    /// strong reference cycle (`objects` holds `Arc<dyn ChannelOwner>`; every
+    /// object holds `Arc<dyn ConnectionLike>` back to the connection), so the
+    /// message loop must drain and dispose the registry when the transport
+    /// closes — otherwise every closed connection leaks its entire object
+    /// graph, including the connection itself.
+    #[tokio::test]
+    async fn transport_close_drains_registry_and_frees_connection() {
+        let (message_tx, message_rx) = mpsc::channel(8);
+        let connection = Arc::new(Connection::new(StubSender, StubReceiver, message_rx));
+        let weak_connection = Arc::downgrade(&connection);
+
+        let run_connection = Arc::clone(&connection);
+        let loop_handle = tokio::spawn(async move { run_connection.run().await });
+
+        // BrowserType tolerates both connection-rooted and object parents,
+        // so one root object plus one child exercises the parent/child
+        // strong edges as well as the registry ones.
+        message_tx
+            .send(create_event("", "BrowserType", "browser-type@root"))
+            .await
+            .expect("message loop must be alive");
+        message_tx
+            .send(create_event(
+                "browser-type@root",
+                "BrowserType",
+                "browser-type@child",
+            ))
+            .await
+            .expect("message loop must be alive");
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while connection.all_objects_sync().len() < 2 {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "objects must register before the transport closes"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+
+        drop(message_tx);
+        loop_handle.await.expect("message loop must exit cleanly");
+
+        assert!(
+            connection.all_objects_sync().is_empty(),
+            "registry must drain when the transport closes"
+        );
+        drop(connection);
+        assert!(
+            weak_connection.upgrade().is_none(),
+            "connection must be freed once external handles drop (object graph cycle broken)"
+        );
     }
 }

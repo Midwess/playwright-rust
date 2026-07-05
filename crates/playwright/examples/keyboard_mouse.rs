@@ -46,18 +46,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mouse = page.mouse();
 
     // Move and click at coordinates
-    mouse.move_to(300, 300, None).await?;
-    mouse.click(400, 300, None).await?;
+    mouse.move_to(300.0, 300.0, None).await?;
+    mouse.click(400.0, 300.0, None).await?;
     println!("Mouse clicked at (400, 300)");
 
     // Drag simulation (down, move, up)
     mouse.down(None).await?;
-    mouse.move_to(500, 300, None).await?;
+    mouse.move_to(500.0, 300.0, None).await?;
     mouse.up(None).await?;
     println!("Simulated drag");
 
     // Scroll with wheel
-    mouse.wheel(0, 100).await?;
+    mouse.wheel(0.0, 100.0).await?;
     println!("Scrolled 100px");
 
     browser.close().await?;

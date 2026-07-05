@@ -78,10 +78,10 @@ impl FrameLocator {
     /// `internal:control=enter-frame` directive.
     ///
     /// See: <https://playwright.dev/docs/api/class-framelocator#frame-locator-locator>
-    pub fn locator(&self, selector: &str) -> Locator {
+    pub fn locator(&self, selector: impl Into<String>) -> Locator {
         Locator::new(
             Arc::clone(&self.frame),
-            format!("{} >> {}", self.selector, selector),
+            format!("{} >> {}", self.selector, selector.into()),
             self.page.clone(),
         )
     }
@@ -158,49 +158,49 @@ impl FrameLocator {
     ///
     /// See: <https://playwright.dev/docs/api/class-framelocator#frame-locator-get-by-text>
     pub fn get_by_text(&self, text: &str, exact: bool) -> Locator {
-        self.locator(&get_by_text_selector(text, exact))
+        self.locator(get_by_text_selector(text, exact))
     }
 
     /// Locate by associated label text inside the iframe.
     ///
     /// See: <https://playwright.dev/docs/api/class-framelocator#frame-locator-get-by-label>
     pub fn get_by_label(&self, text: &str, exact: bool) -> Locator {
-        self.locator(&get_by_label_selector(text, exact))
+        self.locator(get_by_label_selector(text, exact))
     }
 
     /// Locate by placeholder text inside the iframe.
     ///
     /// See: <https://playwright.dev/docs/api/class-framelocator#frame-locator-get-by-placeholder>
     pub fn get_by_placeholder(&self, text: &str, exact: bool) -> Locator {
-        self.locator(&get_by_placeholder_selector(text, exact))
+        self.locator(get_by_placeholder_selector(text, exact))
     }
 
     /// Locate by alt text inside the iframe.
     ///
     /// See: <https://playwright.dev/docs/api/class-framelocator#frame-locator-get-by-alt-text>
     pub fn get_by_alt_text(&self, text: &str, exact: bool) -> Locator {
-        self.locator(&get_by_alt_text_selector(text, exact))
+        self.locator(get_by_alt_text_selector(text, exact))
     }
 
     /// Locate by title attribute inside the iframe.
     ///
     /// See: <https://playwright.dev/docs/api/class-framelocator#frame-locator-get-by-title>
     pub fn get_by_title(&self, text: &str, exact: bool) -> Locator {
-        self.locator(&get_by_title_selector(text, exact))
+        self.locator(get_by_title_selector(text, exact))
     }
 
     /// Locate by `data-testid` attribute inside the iframe.
     ///
     /// See: <https://playwright.dev/docs/api/class-framelocator#frame-locator-get-by-test-id>
     pub fn get_by_test_id(&self, test_id: &str) -> Locator {
-        self.locator(&get_by_test_id_selector(test_id))
+        self.locator(get_by_test_id_selector(test_id))
     }
 
     /// Locate by ARIA role inside the iframe.
     ///
     /// See: <https://playwright.dev/docs/api/class-framelocator#frame-locator-get-by-role>
     pub fn get_by_role(&self, role: AriaRole, options: Option<GetByRoleOptions>) -> Locator {
-        self.locator(&get_by_role_selector(role, options))
+        self.locator(get_by_role_selector(role, options))
     }
 }
 

@@ -4,9 +4,10 @@ const E2E_TEST: &str =
     "https://github.com/padamson/playwright-rust/blob/main/crates/site-e2e/tests/landing_page.rs";
 const TRACE_VIEWER: &str = "https://trace.playwright.dev";
 // Receipts written by the dogfood test into dist/receipts/ on each deploy.
-const TRACE: &str = "/receipts/trace.zip";
-const HAR: &str = "/receipts/dogfood.har";
-const ARIA: &str = "/receipts/aria-snapshot.txt";
+const TRACE: &str = "receipts/trace.zip";
+const HAR: &str = "receipts/dogfood.har";
+const ARIA: &str = "receipts/aria-snapshot.txt";
+const SCREENCAST: &str = "receipts/screencast.jpeg";
 
 #[component]
 pub fn DogfoodBanner() -> impl IntoView {
@@ -52,6 +53,24 @@ pub fn DogfoodBanner() -> impl IntoView {
                         </p>
                         <a href=ARIA download class=dl>"Download .txt"</a>
                     </div>
+                    // Dev-only: a frame the run captured via the unreleased 1.61.0
+                    // screencast API (with cursor decoration). Omitted on release
+                    // snapshots until the feature ships.
+                    {(env!("SITE_VERSION") == "dev").then(|| view! {
+                        <div class=card>
+                            <div class="flex items-center gap-2">
+                                <h3 class="font-semibold text-rust-300">"Screencast frame"</h3>
+                                <span class="rounded-full border border-rust-500/50 bg-rust-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-rust-300">
+                                    "Unreleased"
+                                </span>
+                            </div>
+                            <p class="mt-1 flex-1 text-sm text-rust-50/70">
+                                "A frame is captured with the new screencast API and "
+                                "cursor decoration."
+                            </p>
+                            <a href=SCREENCAST download class=dl>"Download .jpeg"</a>
+                        </div>
+                    })}
                 </div>
 
                 <p class="mt-6 text-sm font-semibold">

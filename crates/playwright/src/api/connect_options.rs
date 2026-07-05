@@ -21,6 +21,9 @@ pub struct ConnectOverCdpOptions {
     /// emulation) when attaching to an already-running browser — for "attach
     /// without disturbing state" workflows.
     pub no_defaults: Option<bool>,
+    /// Directory where traces and downloads captured over this CDP connection
+    /// are stored.
+    pub artifacts_dir: Option<String>,
 }
 
 impl ConnectOverCdpOptions {
@@ -32,6 +35,13 @@ impl ConnectOverCdpOptions {
     /// Disable Playwright's default overrides when attaching to a running browser.
     pub fn no_defaults(mut self, no_defaults: bool) -> Self {
         self.no_defaults = Some(no_defaults);
+        self
+    }
+
+    /// Set the directory for traces and downloads captured over this CDP
+    /// connection.
+    pub fn artifacts_dir(mut self, artifacts_dir: impl Into<String>) -> Self {
+        self.artifacts_dir = Some(artifacts_dir.into());
         self
     }
 

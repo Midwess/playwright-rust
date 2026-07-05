@@ -55,4 +55,11 @@ fn main() {
 
     let dest = Path::new(&env::var("OUT_DIR").unwrap()).join("snippets.rs");
     fs::write(dest, generated).expect("write snippets.rs");
+
+    // Identify which snapshot this build is. Set by the deploy workflow:
+    // `SITE_VERSION=0.14.0` for a release snapshot, left unset (→ "dev") for the
+    // main-HEAD build. Read in-app via `env!("SITE_VERSION")`.
+    println!("cargo:rerun-if-env-changed=SITE_VERSION");
+    let version = env::var("SITE_VERSION").unwrap_or_else(|_| "dev".to_string());
+    println!("cargo:rustc-env=SITE_VERSION={version}");
 }

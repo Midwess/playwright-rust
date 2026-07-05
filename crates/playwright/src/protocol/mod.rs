@@ -26,6 +26,7 @@ pub mod click;
 pub mod clock;
 pub mod console_message;
 pub mod coverage;
+pub mod credentials;
 pub mod debugger;
 pub mod device;
 pub mod dialog;
@@ -68,6 +69,7 @@ pub mod wait_for;
 pub mod web_error;
 pub mod web_socket;
 pub mod web_socket_route;
+pub mod web_storage;
 pub mod worker;
 
 pub use accessibility::{Accessibility, AccessibilitySnapshotOptions};
@@ -95,6 +97,9 @@ pub use console_message::{ConsoleMessage, ConsoleMessageLocation};
 pub use coverage::{
     CSSCoverageEntry, Coverage, CoverageRange, JSCoverageEntry, JSCoverageRange,
     JSFunctionCoverage, StartCSSCoverageOptions, StartJSCoverageOptions,
+};
+pub use credentials::{
+    Credentials, CredentialsCreateOptions, CredentialsGetOptions, VirtualCredential,
 };
 pub use debugger::{Debugger, PausedDetails, PausedLocation};
 pub use device::{DeviceDescriptor, DeviceViewport};
@@ -135,8 +140,8 @@ pub use route::{
     FulfillOptions, FulfillOptionsBuilder, Route, UnrouteBehavior,
 };
 pub use screencast::{
-    ActionPosition, ChapterOptions, OverlayId, Screencast, ScreencastFrame, ScreencastSize,
-    ScreencastStartOptions, ShowActionsOptions, ShowOverlayOptions,
+    ActionCursor, ActionPosition, ChapterOptions, OverlayId, Screencast, ScreencastFrame,
+    ScreencastSize, ScreencastStartOptions, ShowActionsOptions, ShowOverlayOptions,
 };
 pub use screenshot::{Animations, Caret, Scale, ScreenshotClip, ScreenshotOptions, ScreenshotType};
 pub use select_option::SelectOption;
@@ -149,4 +154,5 @@ pub use wait_for::{WaitForOptions, WaitForOptionsBuilder, WaitForState};
 pub use web_error::{WebError, WebErrorLocation};
 pub use web_socket::WebSocket;
 pub use web_socket_route::{WebSocketRoute, WebSocketRouteCloseOptions};
+pub use web_storage::{WebStorage, WebStorageKind};
 pub use worker::Worker;

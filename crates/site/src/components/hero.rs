@@ -6,8 +6,22 @@ const CRATES_IO: &str = "https://crates.io/crates/playwright-rs";
 const DOCS_RS: &str = "https://docs.rs/playwright-rs";
 const GITHUB: &str = "https://github.com/padamson/playwright-rust";
 
+// Playwright driver bundled by the latest crates.io release vs. by main HEAD.
+// Bump these at release time, alongside the install version (snippets/install.toml).
+const PLAYWRIGHT_RELEASED: &str = "1.60.0";
+const PLAYWRIGHT_DEV: &str = "1.61.1";
+
 #[component]
 pub fn Hero() -> impl IntoView {
+    // The dev (main HEAD) build is unreleased and bundles a newer driver, so its
+    // badges differ from a published release snapshot.
+    let is_dev = env!("SITE_VERSION") == "dev";
+    let playwright = if is_dev {
+        PLAYWRIGHT_DEV
+    } else {
+        PLAYWRIGHT_RELEASED
+    };
+
     view! {
         <header id="hero" class="flex flex-col items-center px-6 pt-24 pb-16 text-center">
             <h1
@@ -29,14 +43,30 @@ pub fn Hero() -> impl IntoView {
                 class="mt-7 flex flex-wrap items-center justify-center gap-2"
             >
                 <a href=CRATES_IO>
-                    <img alt="crates.io" src="https://img.shields.io/crates/v/playwright-rs.svg"/>
+                    {if is_dev {
+                        view! {
+                            <img
+                                alt="crates.io: unreleased"
+                                src="https://img.shields.io/badge/crates.io-unreleased-inactive"
+                            />
+                        }
+                            .into_any()
+                    } else {
+                        view! {
+                            <img
+                                alt="crates.io"
+                                src="https://img.shields.io/crates/v/playwright-rs.svg"
+                            />
+                        }
+                            .into_any()
+                    }}
                 </a>
                 <a href=DOCS_RS>
                     <img alt="docs.rs" src="https://docs.rs/playwright-rs/badge.svg"/>
                 </a>
                 <img
-                    alt="Playwright 1.60.0"
-                    src="https://img.shields.io/badge/Playwright-1.60.0-45ba4b"
+                    alt=format!("Playwright {playwright}")
+                    src=format!("https://img.shields.io/badge/Playwright-{playwright}-45ba4b")
                 />
             </div>
 
@@ -60,7 +90,7 @@ pub fn Hero() -> impl IntoView {
                     href=CRATES_IO
                     class="inline-flex items-center gap-2 rounded-lg border border-rust-700/50 px-5 py-2.5 font-semibold text-rust-50 transition hover:border-rust-500"
                 >
-                    <img src="/crates-io.png" alt="" class="h-5 w-auto"/>
+                    <img src="crates-io.png" alt="" class="h-5 w-auto"/>
                     "crates.io"
                 </a>
             </div>

@@ -261,7 +261,7 @@ mod tty_guard;
 /// When installing browsers, use this version to ensure compatibility:
 ///
 /// ```bash
-/// npx playwright@1.60.0 install
+/// npx playwright@1.61.1 install
 /// ```
 ///
 /// See: <https://playwright.dev/docs/browsers>
@@ -326,8 +326,16 @@ pub use protocol::{Animations, Caret, Scale, ScreenshotClip, ScreenshotOptions, 
 
 // Re-export screencast types
 pub use protocol::{
-    ActionPosition, ChapterOptions, OverlayId, Screencast, ScreencastFrame, ScreencastSize,
-    ScreencastStartOptions, ShowActionsOptions, ShowOverlayOptions,
+    ActionCursor, ActionPosition, ChapterOptions, OverlayId, Screencast, ScreencastFrame,
+    ScreencastSize, ScreencastStartOptions, ShowActionsOptions, ShowOverlayOptions,
+};
+
+// Re-export WebStorage (page.local_storage / session_storage)
+pub use protocol::{WebStorage, WebStorageKind};
+
+// Re-export WebAuthn credentials (browser_context.credentials)
+pub use protocol::{
+    Credentials, CredentialsCreateOptions, CredentialsGetOptions, VirtualCredential,
 };
 
 // Re-export new page method types

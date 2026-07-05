@@ -13,6 +13,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::protocol::selectors::Selectors;
 use crate::server::channel_owner::ChannelOwner;
+use crate::server::error_parsing::parse_protocol_error;
 use tracing::Instrument;
 
 /// Trait defining the interface that ChannelOwner needs from a Connection.
@@ -199,11 +200,30 @@ pub struct Response {
     pub result: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<ErrorWrapper>,
+    /// Structured failure details, a top-level sibling of `error`. Populated for
+    /// methods that declare `errorDetails` in the protocol (currently only
+    /// `Frame.expect`, used for auto-retrying assertions).
+    #[serde(rename = "errorDetails", skip_serializing_if = "Option::is_none")]
+    pub error_details: Option<ExpectErrorDetails>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ErrorWrapper {
     pub error: ErrorPayload,
+}
+
+/// Structured `expect` failure details (Playwright 1.61+). Sent alongside an
+/// `error` to distinguish an assertion mismatch/timeout from a genuine protocol
+/// error: a real error (e.g. bad selector) arrives without these details.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExpectErrorDetails {
+    #[serde(default)]
+    pub timed_out: Option<bool>,
+    #[serde(default)]
+    pub custom_error_message: Option<String>,
+    #[serde(default)]
+    pub received: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -453,7 +473,10 @@ impl Connection {
                 })?;
 
                 let result = if let Some(error_wrapper) = response.error {
-                    Err(parse_protocol_error(error_wrapper.error))
+                    Err(parse_protocol_error(
+                        error_wrapper.error,
+                        response.error_details,
+                    ))
                 } else {
                     Ok(response.result.unwrap_or(Value::Null))
                 };
@@ -679,54 +702,4 @@ impl ConnectionLike for Connection {
     fn selectors(&self) -> Arc<Selectors> {
         Arc::clone(&self.selectors)
     }
-}
-
-/// Detects if an error message indicates a browser installation issue
-fn is_browser_installation_error(message: &str) -> bool {
-    message.contains("Looks like Playwright")
-        || message.contains("Executable doesn't exist")
-        || message.contains("not installed")
-        || message.contains("Please run")
-}
-
-/// Extracts browser name from error message
-fn extract_browser_name(message: &str) -> &str {
-    // Check in priority order (specific to generic)
-    if message.contains("chromium") {
-        "chromium"
-    } else if message.contains("firefox") {
-        "firefox"
-    } else if message.contains("webkit") {
-        "webkit"
-    } else {
-        // If we can't detect the browser, use a generic message
-        "browsers"
-    }
-}
-
-fn parse_protocol_error(payload: ErrorPayload) -> Error {
-    // Detect browser installation errors
-    // Playwright server sends errors with messages like:
-    // "Looks like Playwright Test or Playwright was just installed or updated."
-    // or "browserType.launch: Executable doesn't exist at /path/to/chromium"
-
-    let message = &payload.message;
-
-    // Check for browser installation errors
-    if is_browser_installation_error(message) {
-        let browser_name = extract_browser_name(message);
-
-        return Error::BrowserNotInstalled {
-            browser_name: browser_name.to_string(),
-            message: message.clone(),
-            playwright_version: crate::PLAYWRIGHT_VERSION.to_string(),
-        };
-    }
-
-    // Default: return as protocol error
-    Error::ProtocolError(format!(
-        "{} \n {}",
-        payload.message,
-        payload.stack.unwrap_or_default()
-    ))
 }

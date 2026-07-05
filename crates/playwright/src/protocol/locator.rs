@@ -799,7 +799,7 @@ impl Locator {
     ///
     /// See: <https://playwright.dev/docs/api/class-locator#locator-get-by-text>
     pub fn get_by_text(&self, text: &str, exact: bool) -> Locator {
-        self.locator(&get_by_text_selector(text, exact))
+        self.locator(get_by_text_selector(text, exact))
     }
 
     /// Returns a locator that matches elements by their associated label text.
@@ -809,14 +809,14 @@ impl Locator {
     ///
     /// See: <https://playwright.dev/docs/api/class-locator#locator-get-by-label>
     pub fn get_by_label(&self, text: &str, exact: bool) -> Locator {
-        self.locator(&get_by_label_selector(text, exact))
+        self.locator(get_by_label_selector(text, exact))
     }
 
     /// Returns a locator that matches elements by their placeholder text.
     ///
     /// See: <https://playwright.dev/docs/api/class-locator#locator-get-by-placeholder>
     pub fn get_by_placeholder(&self, text: &str, exact: bool) -> Locator {
-        self.locator(&get_by_placeholder_selector(text, exact))
+        self.locator(get_by_placeholder_selector(text, exact))
     }
 
     /// Returns a locator that matches elements by their alt text.
@@ -825,14 +825,14 @@ impl Locator {
     ///
     /// See: <https://playwright.dev/docs/api/class-locator#locator-get-by-alt-text>
     pub fn get_by_alt_text(&self, text: &str, exact: bool) -> Locator {
-        self.locator(&get_by_alt_text_selector(text, exact))
+        self.locator(get_by_alt_text_selector(text, exact))
     }
 
     /// Returns a locator that matches elements by their title attribute.
     ///
     /// See: <https://playwright.dev/docs/api/class-locator#locator-get-by-title>
     pub fn get_by_title(&self, text: &str, exact: bool) -> Locator {
-        self.locator(&get_by_title_selector(text, exact))
+        self.locator(get_by_title_selector(text, exact))
     }
 
     /// Returns a locator that matches elements by their test ID attribute.
@@ -846,7 +846,7 @@ impl Locator {
     pub fn get_by_test_id(&self, test_id: &str) -> Locator {
         use crate::server::channel_owner::ChannelOwner as _;
         let attr = self.frame.connection().selectors().test_id_attribute();
-        self.locator(&get_by_test_id_selector_with_attr(test_id, &attr))
+        self.locator(get_by_test_id_selector_with_attr(test_id, &attr))
     }
 
     /// Returns a locator that matches elements by their ARIA role.
@@ -856,16 +856,16 @@ impl Locator {
     ///
     /// See: <https://playwright.dev/docs/api/class-locator#locator-get-by-role>
     pub fn get_by_role(&self, role: AriaRole, options: Option<GetByRoleOptions>) -> Locator {
-        self.locator(&get_by_role_selector(role, options))
+        self.locator(get_by_role_selector(role, options))
     }
 
     /// Creates a sub-locator within this locator's subtree.
     ///
     /// See: <https://playwright.dev/docs/api/class-locator#locator-locator>
-    pub fn locator(&self, selector: &str) -> Locator {
+    pub fn locator(&self, selector: impl Into<String>) -> Locator {
         Locator::new(
             Arc::clone(&self.frame),
-            format!("{} >> {}", self.selector, selector),
+            format!("{} >> {}", self.selector, selector.into()),
             self.page.clone(),
         )
     }

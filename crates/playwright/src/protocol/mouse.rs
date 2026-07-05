@@ -26,8 +26,8 @@ impl Mouse {
     /// See: <https://playwright.dev/docs/api/class-mouse#mouse-move>
     pub async fn move_to(
         &self,
-        x: i32,
-        y: i32,
+        x: f64,
+        y: f64,
         options: Option<crate::protocol::MouseOptions>,
     ) -> Result<()> {
         self.page.mouse_move(x, y, options).await
@@ -38,8 +38,8 @@ impl Mouse {
     /// See: <https://playwright.dev/docs/api/class-mouse#mouse-click>
     pub async fn click(
         &self,
-        x: i32,
-        y: i32,
+        x: f64,
+        y: f64,
         options: Option<crate::protocol::MouseOptions>,
     ) -> Result<()> {
         self.page.mouse_click(x, y, options).await
@@ -50,8 +50,8 @@ impl Mouse {
     /// See: <https://playwright.dev/docs/api/class-mouse#mouse-dblclick>
     pub async fn dblclick(
         &self,
-        x: i32,
-        y: i32,
+        x: f64,
+        y: f64,
         options: Option<crate::protocol::MouseOptions>,
     ) -> Result<()> {
         self.page.mouse_dblclick(x, y, options).await
@@ -74,7 +74,7 @@ impl Mouse {
     /// Dispatches a `wheel` event for manual page scrolling.
     ///
     /// See: <https://playwright.dev/docs/api/class-mouse#mouse-wheel>
-    pub async fn wheel(&self, delta_x: i32, delta_y: i32) -> Result<()> {
+    pub async fn wheel(&self, delta_x: f64, delta_y: f64) -> Result<()> {
         self.page.mouse_wheel(delta_x, delta_y).await
     }
 }

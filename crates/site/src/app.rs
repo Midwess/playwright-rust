@@ -1,6 +1,8 @@
 use leptos::prelude::*;
 
-use crate::components::{Comparison, DogfoodBanner, Features, Footer, Hero, Install, Walkthrough};
+use crate::components::{
+    Comparison, DogfoodBanner, Features, Footer, Hero, Install, VersionSwitcher, Walkthrough,
+};
 
 /// Root of the landing page. Each section is a reusable component so the view
 /// code carries over unchanged if the build ever moves from CSR/Trunk to
@@ -9,6 +11,7 @@ use crate::components::{Comparison, DogfoodBanner, Features, Footer, Hero, Insta
 pub fn App() -> impl IntoView {
     view! {
         <div class="min-h-screen bg-ink-900 text-rust-50 antialiased">
+            <VersionSwitcher/>
             <Hero/>
             <Install/>
             <Comparison/>

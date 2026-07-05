@@ -11,9 +11,9 @@ use serde::Deserialize;
 #[derive(Clone, Debug, Deserialize)]
 pub struct DeviceViewport {
     /// The viewport width in CSS pixels.
-    pub width: i32,
+    pub width: u32,
     /// The viewport height in CSS pixels.
-    pub height: i32,
+    pub height: u32,
 }
 
 /// Describes a device for browser emulation.

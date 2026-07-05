@@ -81,6 +81,9 @@ use std::path::PathBuf;
 pub struct ScreencastFrame {
     /// JPEG-encoded frame bytes.
     pub data: bytes::Bytes,
+    /// Frame presentation timestamp in seconds.
+    /// `None` if the driver did not supply one.
+    pub timestamp: Option<f64>,
 }
 
 /// Options for [`Screencast::start`].
@@ -91,7 +94,7 @@ pub struct ScreencastStartOptions {
     /// current viewport size.
     pub size: Option<ScreencastSize>,
     /// JPEG quality, `0..=100`. Server default is implementation-defined.
-    pub quality: Option<i32>,
+    pub quality: Option<u8>,
     /// When set, the screencast is also recorded to a file at this
     /// path. The file is written on [`Screencast::stop`]. The recording
     /// covers only the active start/stop window — for a continuous
@@ -107,8 +110,8 @@ impl ScreencastStartOptions {
         self.size = Some(size);
         self
     }
-    /// Video quality (codec-specific).
-    pub fn quality(mut self, quality: i32) -> Self {
+    /// JPEG quality, `0..=100`.
+    pub fn quality(mut self, quality: u8) -> Self {
         self.quality = Some(quality);
         self
     }
@@ -122,8 +125,8 @@ impl ScreencastStartOptions {
 /// Pixel dimensions for a screencast frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScreencastSize {
-    pub width: i32,
-    pub height: i32,
+    pub width: u32,
+    pub height: u32,
 }
 
 /// Position for the action-label overlay.
@@ -151,6 +154,25 @@ impl ActionPosition {
     }
 }
 
+/// Pointer-cursor decoration for action overlays.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ActionCursor {
+    /// No cursor decoration.
+    None,
+    /// Draw a pointer cursor at each action point.
+    Pointer,
+}
+
+impl ActionCursor {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            ActionCursor::None => "none",
+            ActionCursor::Pointer => "pointer",
+        }
+    }
+}
+
 /// Options for [`Screencast::show_actions`].
 #[derive(Debug, Default, Clone)]
 #[non_exhaustive]
@@ -161,6 +183,8 @@ pub struct ShowActionsOptions {
     pub position: Option<ActionPosition>,
     /// Label font size, pixels.
     pub font_size: Option<i32>,
+    /// Pointer-cursor decoration at action points.
+    pub cursor: Option<ActionCursor>,
 }
 
 impl ShowActionsOptions {
@@ -177,6 +201,11 @@ impl ShowActionsOptions {
     /// Label font size in pixels.
     pub fn font_size(mut self, font_size: i32) -> Self {
         self.font_size = Some(font_size);
+        self
+    }
+    /// Pointer-cursor decoration at action points.
+    pub fn cursor(mut self, cursor: ActionCursor) -> Self {
+        self.cursor = Some(cursor);
         self
     }
 }
@@ -309,5 +338,46 @@ impl Screencast {
     #[tracing::instrument(level = "debug", skip_all, fields(page_guid = %self.page.guid(), visible))]
     pub async fn set_overlay_visible(&self, visible: bool) -> Result<()> {
         self.page.screencast_set_overlay_visible(visible).await
+    }
+}
+
+#[cfg(test)]
+mod options_tests {
+    use super::{
+        ActionCursor, ActionPosition, ScreencastSize, ScreencastStartOptions, ShowActionsOptions,
+    };
+
+    #[test]
+    fn start_builder_sets_quality_and_size() {
+        let o = ScreencastStartOptions::default()
+            .quality(80)
+            .size(ScreencastSize {
+                width: 1280,
+                height: 720,
+            });
+        assert_eq!(o.quality, Some(80));
+        assert_eq!(o.size.map(|s| (s.width, s.height)), Some((1280, 720)));
+    }
+
+    #[test]
+    fn action_cursor_as_str_maps_each_variant() {
+        assert_eq!(ActionCursor::None.as_str(), "none");
+        assert_eq!(ActionCursor::Pointer.as_str(), "pointer");
+    }
+
+    #[test]
+    fn action_position_as_str_maps_each_variant() {
+        assert_eq!(ActionPosition::TopLeft.as_str(), "top-left");
+        assert_eq!(ActionPosition::Top.as_str(), "top");
+        assert_eq!(ActionPosition::TopRight.as_str(), "top-right");
+        assert_eq!(ActionPosition::BottomLeft.as_str(), "bottom-left");
+        assert_eq!(ActionPosition::Bottom.as_str(), "bottom");
+        assert_eq!(ActionPosition::BottomRight.as_str(), "bottom-right");
+    }
+
+    #[test]
+    fn show_actions_builder_sets_cursor() {
+        let o = ShowActionsOptions::default().cursor(ActionCursor::Pointer);
+        assert_eq!(o.cursor, Some(ActionCursor::Pointer));
     }
 }

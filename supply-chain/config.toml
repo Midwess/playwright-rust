@@ -53,10 +53,6 @@ criteria = "safe-to-deploy"
 version = "0.1.0"
 criteria = "safe-to-deploy"
 
-[[exemptions.bytes]]
-version = "1.11.1"
-criteria = "safe-to-deploy"
-
 [[exemptions.cc]]
 version = "1.2.60"
 criteria = "safe-to-deploy"

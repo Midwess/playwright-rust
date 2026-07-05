@@ -1,9 +1,18 @@
 name: Pages
 
-# Builds the Leptos landing page (crates/site) and only deploys it if the
-# playwright-rs dogfood test (crates/site-e2e) passes against the built output.
-# Those crates are excluded from the root workspace, so this is the only
-# workflow that builds/tests them.
+# Versioned deploy of the Leptos landing page to the `gh-pages` branch:
+#   - push to main            -> rebuilds /dev/   (unreleased preview)
+#   - workflow_dispatch+input -> builds /v<version>/ from CURRENT source
+#                                (bootstrap of /v0.14.0/, and each release: a
+#                                release runs `gh workflow run pages.yml -f
+#                                version=X.Y.Z` from the tag — see release docs)
+# Each run regenerates /versions.json (the dropdown manifest) + the root
+# redirect to the latest release. Deploys only if the playwright-rs dogfood
+# test passes against the built output. The site crates are excluded from the
+# root workspace, so this is the only workflow that builds/tests them.
+#
+# One-time setup after the first run: Settings -> Pages -> Build and deployment
+# -> Source: "Deploy from a branch" -> Branch: gh-pages / (root).
 
 on:
   push:
@@ -13,27 +22,40 @@ on:
       - "crates/site-e2e/**"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Publish current source as /v<version>/ (e.g. 0.14.0). Blank = normal /dev/ build."
+        required: false
+        default: ""
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write # push to gh-pages
 
-# One deploy at a time; let an in-progress run finish (don't cancel a deploy).
+# One deploy at a time; don't cancel an in-progress deploy.
 concurrency:
   group: pages
   cancel-in-progress: false
 
 jobs:
-  build-test:
-    name: Build + dogfood test
+  deploy:
+    name: Build, dogfood-gate, and deploy
     runs-on: ubuntu-latest
     env:
-      # Driver to a stable, version-keyed path cached on its own key (see the
-      # decoupling in build.rs); shared by the playwright-rs CLI and site-e2e.
       PLAYWRIGHT_DRIVER_CACHE_DIR: ${{ github.workspace }}/.playwright-driver
     steps:
       - uses: actions/checkout@v7
+
+      - name: Determine target snapshot
+        id: target
+        run: |
+          ver="${{ github.event.inputs.version }}"
+          if [ -n "$ver" ]; then
+            echo "site_version=$ver" >> "$GITHUB_OUTPUT"
+            echo "dest=v$ver" >> "$GITHUB_OUTPUT"
+          else
+            echo "site_version=dev" >> "$GITHUB_OUTPUT"
+            echo "dest=dev" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -54,20 +76,18 @@ jobs:
           tool: trunk
 
       - name: Cache Playwright driver
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ${{ github.workspace }}/.playwright-driver
-          key: ${{ runner.os }}-pw-driver-1.60.0
+          key: ${{ runner.os }}-pw-driver-1.61.1
 
       - name: Cache Playwright browsers
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-browsers-1.60.0-v2
-          restore-keys: ${{ runner.os }}-playwright-browsers-1.60.0-
+          key: ${{ runner.os }}-playwright-browsers-1.61.1-v2
+          restore-keys: ${{ runner.os }}-playwright-browsers-1.61.1-
 
-      # The site crates are outside the workspace, so the workspace-wide fmt/
-      # clippy in test.yml never sees them — check them here.
       - name: Format + lint site crates
         run: |
           cargo fmt --manifest-path crates/site/Cargo.toml -- --check
@@ -75,8 +95,11 @@ jobs:
           cargo clippy --manifest-path crates/site/Cargo.toml --target wasm32-unknown-unknown --all-targets -- -D warnings
           cargo clippy --manifest-path crates/site-e2e/Cargo.toml --all-targets -- -D warnings
 
-      - name: Build site
-        run: cd crates/site && trunk build --release
+      # Dogfood gate: a canonical root-served dev build the binding can drive.
+      # SITE_VERSION=dev so the switcher's dev-banner assertion holds; public-url
+      # stays "/" so the e2e server (serving dist at root) resolves assets.
+      - name: Build site for dogfood gate
+        run: cd crates/site && SITE_VERSION=dev trunk build --release
 
       - name: Install Chromium
         run: cargo run --release -p playwright-rs --bin playwright-rs --features cli -- install chromium --with-deps
@@ -84,26 +107,49 @@ jobs:
       - name: Dogfood test (deploy gate)
         run: cargo test --manifest-path crates/site-e2e/Cargo.toml
 
-      # The gate writes fresh receipts into public/receipts/; copy them into the
-      # built dist/ (the build before the test had none) for the deploy.
-      - name: Stage receipts into the artifact
+      # Build the actual snapshot for the target subpath. Assets resolve under
+      # /<dest>/; SITE_VERSION labels the build for the switcher + banner.
+      - name: Build snapshot for ${{ steps.target.outputs.dest }}
         run: |
-          rm -rf crates/site/dist/receipts
-          cp -r crates/site/public/receipts crates/site/dist/receipts
+          cd crates/site
+          SITE_VERSION="${{ steps.target.outputs.site_version }}" \
+            trunk build --release --public-url "/${{ steps.target.outputs.dest }}/" --dist dist-snapshot
+          rm -rf dist-snapshot/receipts
+          cp -r public/receipts dist-snapshot/receipts || true
 
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v5
-        with:
-          path: crates/site/dist
+      - name: Check out gh-pages
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if git ls-remote --exit-code --heads origin gh-pages >/dev/null 2>&1; then
+            git fetch origin gh-pages
+            # -B puts the worktree on a local gh-pages branch (not detached HEAD)
+            # reset to the remote, so the commit/push below has a ref to push.
+            git worktree add -B gh-pages gh origin/gh-pages
+          else
+            # First run: create the branch off HEAD, then clear inherited files
+            # so gh-pages holds only deployed site content.
+            git worktree add -b gh-pages gh
+            (cd gh && git rm -rqf . >/dev/null 2>&1 || true)
+          fi
 
-  deploy:
-    name: Deploy to GitHub Pages
-    needs: build-test
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy
-        id: deployment
-        uses: actions/deploy-pages@v5
+      - name: Assemble snapshot + manifest
+        run: |
+          dest="${{ steps.target.outputs.dest }}"
+          rm -rf "gh/$dest"
+          mkdir -p "gh/$dest"
+          cp -r crates/site/dist-snapshot/. "gh/$dest/"
+          bash crates/site/deploy/update-manifest.sh gh
+          echo "playwright-rust.dev" > gh/CNAME
+          touch gh/.nojekyll
+
+      - name: Commit + push gh-pages
+        run: |
+          cd gh
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to publish."
+          else
+            git commit -m "Deploy ${{ steps.target.outputs.dest }} (${{ github.sha }})"
+            git push origin HEAD:gh-pages
+          fi

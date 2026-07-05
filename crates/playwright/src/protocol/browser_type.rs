@@ -541,6 +541,7 @@ impl BrowserType {
             headers: headers_array,
             slow_mo: options.slow_mo,
             no_defaults: options.no_defaults,
+            artifacts_dir: options.artifacts_dir,
             timeout: options.timeout.unwrap_or(crate::DEFAULT_TIMEOUT_MS),
         };
 
@@ -601,6 +602,8 @@ struct ConnectOverCdpParams {
     slow_mo: Option<f64>,
     #[serde(rename = "noDefaults", skip_serializing_if = "Option::is_none")]
     no_defaults: Option<bool>,
+    #[serde(rename = "artifactsDir", skip_serializing_if = "Option::is_none")]
+    artifacts_dir: Option<String>,
     timeout: f64,
 }
 
@@ -688,3 +691,37 @@ impl std::fmt::Debug for BrowserType {
 // - A real Connection with object registry
 // - Protocol messages from the server
 // See: crates/playwright-core/tests/connection_integration.rs
+
+#[cfg(test)]
+mod connect_over_cdp_params_tests {
+    use super::ConnectOverCdpParams;
+
+    #[test]
+    fn serializes_artifacts_dir_as_camelcase_when_set() {
+        let params = ConnectOverCdpParams {
+            endpoint_url: "http://localhost:9222".to_string(),
+            headers: None,
+            slow_mo: None,
+            no_defaults: None,
+            artifacts_dir: Some("/tmp/artifacts".to_string()),
+            timeout: 30000.0,
+        };
+        let v = serde_json::to_value(&params).unwrap();
+        assert_eq!(v["artifactsDir"], "/tmp/artifacts");
+        assert_eq!(v["endpointURL"], "http://localhost:9222");
+    }
+
+    #[test]
+    fn omits_artifacts_dir_when_unset() {
+        let params = ConnectOverCdpParams {
+            endpoint_url: "http://localhost:9222".to_string(),
+            headers: None,
+            slow_mo: None,
+            no_defaults: None,
+            artifacts_dir: None,
+            timeout: 30000.0,
+        };
+        let v = serde_json::to_value(&params).unwrap();
+        assert!(v.get("artifactsDir").is_none());
+    }
+}

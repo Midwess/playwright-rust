@@ -16,6 +16,8 @@ pub mod connection;
 #[doc(hidden)]
 pub mod driver;
 #[doc(hidden)]
+pub mod error_parsing;
+#[doc(hidden)]
 pub mod object_factory;
 #[doc(hidden)]
 pub mod playwright_server;

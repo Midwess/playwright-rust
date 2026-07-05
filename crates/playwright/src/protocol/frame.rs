@@ -377,34 +377,32 @@ impl Frame {
     /// In normal usage the main frame always has its page wired up by `Page::main_frame()`.
     ///
     /// See: <https://playwright.dev/docs/api/class-frame#frame-locator>
-    pub fn locator(&self, selector: &str) -> crate::protocol::Locator {
+    pub fn locator(&self, selector: impl Into<String>) -> crate::protocol::Locator {
         let page = self
             .page()
             .expect("Frame::locator() called before set_page(); call page.main_frame() first");
-        crate::protocol::Locator::new(Arc::new(self.clone()), selector.to_string(), page)
+        crate::protocol::Locator::new(Arc::new(self.clone()), selector.into(), page)
     }
 
     /// Returns a locator that matches elements containing the given text.
     ///
     /// See: <https://playwright.dev/docs/api/class-frame#frame-get-by-text>
     pub fn get_by_text(&self, text: &str, exact: bool) -> crate::protocol::Locator {
-        self.locator(&crate::protocol::locator::get_by_text_selector(text, exact))
+        self.locator(crate::protocol::locator::get_by_text_selector(text, exact))
     }
 
     /// Returns a locator that matches elements by their associated label text.
     ///
     /// See: <https://playwright.dev/docs/api/class-frame#frame-get-by-label>
     pub fn get_by_label(&self, text: &str, exact: bool) -> crate::protocol::Locator {
-        self.locator(&crate::protocol::locator::get_by_label_selector(
-            text, exact,
-        ))
+        self.locator(crate::protocol::locator::get_by_label_selector(text, exact))
     }
 
     /// Returns a locator that matches elements by their placeholder text.
     ///
     /// See: <https://playwright.dev/docs/api/class-frame#frame-get-by-placeholder>
     pub fn get_by_placeholder(&self, text: &str, exact: bool) -> crate::protocol::Locator {
-        self.locator(&crate::protocol::locator::get_by_placeholder_selector(
+        self.locator(crate::protocol::locator::get_by_placeholder_selector(
             text, exact,
         ))
     }
@@ -413,7 +411,7 @@ impl Frame {
     ///
     /// See: <https://playwright.dev/docs/api/class-frame#frame-get-by-alt-text>
     pub fn get_by_alt_text(&self, text: &str, exact: bool) -> crate::protocol::Locator {
-        self.locator(&crate::protocol::locator::get_by_alt_text_selector(
+        self.locator(crate::protocol::locator::get_by_alt_text_selector(
             text, exact,
         ))
     }
@@ -422,9 +420,7 @@ impl Frame {
     ///
     /// See: <https://playwright.dev/docs/api/class-frame#frame-get-by-title>
     pub fn get_by_title(&self, text: &str, exact: bool) -> crate::protocol::Locator {
-        self.locator(&crate::protocol::locator::get_by_title_selector(
-            text, exact,
-        ))
+        self.locator(crate::protocol::locator::get_by_title_selector(text, exact))
     }
 
     /// Returns a locator that matches elements by their test ID attribute.
@@ -436,7 +432,9 @@ impl Frame {
     pub fn get_by_test_id(&self, test_id: &str) -> crate::protocol::Locator {
         use crate::server::channel_owner::ChannelOwner;
         let attr = self.connection().selectors().test_id_attribute();
-        self.locator(&crate::protocol::locator::get_by_test_id_selector_with_attr(test_id, &attr))
+        self.locator(crate::protocol::locator::get_by_test_id_selector_with_attr(
+            test_id, &attr,
+        ))
     }
 
     /// Returns a locator that matches elements by their ARIA role.
@@ -447,7 +445,7 @@ impl Frame {
         role: crate::protocol::locator::AriaRole,
         options: Option<crate::protocol::locator::GetByRoleOptions>,
     ) -> crate::protocol::Locator {
-        self.locator(&crate::protocol::locator::get_by_role_selector(
+        self.locator(crate::protocol::locator::get_by_role_selector(
             role, options,
         ))
     }
@@ -2376,16 +2374,6 @@ impl Frame {
         is_not: bool,
         timeout_ms: f64,
     ) -> Result<()> {
-        #[derive(serde::Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        struct ExpectResult {
-            matches: bool,
-            #[serde(default)]
-            timed_out: Option<bool>,
-            #[serde(default)]
-            error_message: Option<String>,
-        }
-
         let params = serde_json::json!({
             "selector": selector,
             "expression": expression,
@@ -2394,20 +2382,14 @@ impl Frame {
             "timeout": timeout_ms
         });
 
-        let result: ExpectResult = self.channel().send("expect", params).await?;
-
-        if result.matches != is_not {
-            Ok(())
-        } else {
-            let msg = result
-                .error_message
-                .unwrap_or_else(|| format!("Assertion '{}' failed", expression));
-            if result.timed_out == Some(true) {
-                Err(crate::error::Error::AssertionTimeout(msg))
-            } else {
-                Err(crate::error::Error::AssertionFailed(msg))
-            }
-        }
+        // Playwright 1.61 changed the `expect` channel method: it returns no
+        // result on success and reports a failed assertion as a protocol error
+        // carrying top-level `errorDetails` (surfaced by the connection layer as
+        // `AssertionFailed` / `AssertionTimeout`). The server applies `isNot`
+        // itself, so a successful call always means the assertion held. A genuine
+        // error (e.g. a bad selector) arrives without `errorDetails` and
+        // propagates unchanged.
+        self.channel().send_no_result("expect", params).await
     }
 
     /// Adds a `<script>` tag into the frame with the desired content.

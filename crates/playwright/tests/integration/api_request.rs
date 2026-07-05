@@ -136,3 +136,40 @@ async fn test_api_request_dispose() {
         .await
         .expect("shutdown should succeed");
 }
+
+#[tokio::test]
+async fn test_api_response_server_addr_and_security_details() {
+    crate::common::init_tracing();
+    let server = TestServer::start().await;
+
+    let playwright = Playwright::launch()
+        .await
+        .expect("setup: failed to launch Playwright");
+    let ctx = playwright
+        .request()
+        .new_context(None)
+        .await
+        .expect("Failed to create APIRequestContext");
+
+    let url = format!("{}/api/data.json", server.url());
+    let response: APIResponse = ctx.get(&url, None).await.expect("GET should succeed");
+
+    // Plain HTTP carries no TLS details, and the server omits a remote address
+    // for this fetch. The accessors must resolve cleanly (the new initializer
+    // fields must not break fetch deserialization). The populated case is
+    // covered by the deserialization unit tests in response.rs.
+    assert!(
+        response.security_details().is_none(),
+        "plain HTTP should have no security details"
+    );
+    if let Some(addr) = response.server_addr() {
+        assert!(addr.port > 0, "if present, server port should be set");
+    }
+
+    ctx.dispose().await.expect("dispose should succeed");
+    playwright
+        .shutdown()
+        .await
+        .expect("shutdown should succeed");
+    server.shutdown();
+}

@@ -15,7 +15,8 @@ use std::sync::Arc;
 /// All fields are optional — the server provides what's available.
 ///
 /// See: <https://playwright.dev/docs/api/class-response#response-security-details>
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct SecurityDetails {
     /// Certificate issuer name.
@@ -33,7 +34,8 @@ pub struct SecurityDetails {
 /// Remote server address (IP and port).
 ///
 /// See: <https://playwright.dev/docs/api/class-response#response-server-addr>
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct RemoteAddr {
     /// Server IP address.
@@ -365,5 +367,41 @@ impl std::fmt::Debug for ResponseObject {
         f.debug_struct("ResponseObject")
             .field("guid", &self.guid())
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod security_remote_addr_tests {
+    use super::{RemoteAddr, SecurityDetails};
+
+    #[test]
+    fn security_details_deserializes_camelcase() {
+        let v = serde_json::json!({
+            "issuer": "Let's Encrypt",
+            "protocol": "TLS 1.3",
+            "subjectName": "example.com",
+            "validFrom": 1_700_000_000.0,
+            "validTo": 1_800_000_000.0
+        });
+        let sd: SecurityDetails = serde_json::from_value(v).unwrap();
+        assert_eq!(sd.issuer.as_deref(), Some("Let's Encrypt"));
+        assert_eq!(sd.subject_name.as_deref(), Some("example.com"));
+        assert_eq!(sd.protocol.as_deref(), Some("TLS 1.3"));
+        assert_eq!(sd.valid_from, Some(1_700_000_000.0));
+        assert_eq!(sd.valid_to, Some(1_800_000_000.0));
+    }
+
+    #[test]
+    fn security_details_allows_missing_fields() {
+        let sd: SecurityDetails = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(sd.issuer.is_none() && sd.protocol.is_none() && sd.subject_name.is_none());
+    }
+
+    #[test]
+    fn remote_addr_deserializes_camelcase() {
+        let v = serde_json::json!({ "ipAddress": "127.0.0.1", "port": 8080 });
+        let addr: RemoteAddr = serde_json::from_value(v).unwrap();
+        assert_eq!(addr.ip_address, "127.0.0.1");
+        assert_eq!(addr.port, 8080);
     }
 }

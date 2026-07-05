@@ -155,6 +155,10 @@ impl APIRequestContext {
             status: u16,
             status_text: String,
             headers: Vec<HeaderEntry>,
+            #[serde(default)]
+            security_details: Option<crate::protocol::response::SecurityDetails>,
+            #[serde(default)]
+            server_addr: Option<crate::protocol::response::RemoteAddr>,
         }
 
         #[derive(serde::Deserialize)]
@@ -179,6 +183,8 @@ impl APIRequestContext {
             status_text: result.response.status_text,
             headers,
             fetch_uid: result.response.fetch_uid,
+            security_details: result.response.security_details,
+            server_addr: result.response.server_addr,
         })
     }
 
@@ -341,6 +347,8 @@ pub struct APIResponse {
     status_text: String,
     headers: HashMap<String, String>,
     fetch_uid: String,
+    security_details: Option<crate::protocol::response::SecurityDetails>,
+    server_addr: Option<crate::protocol::response::RemoteAddr>,
 }
 
 impl APIResponse {
@@ -367,6 +375,22 @@ impl APIResponse {
     /// Returns the response headers as a `HashMap<String, String>`.
     pub fn headers(&self) -> &HashMap<String, String> {
         &self.headers
+    }
+
+    /// Returns TLS/SSL security details for HTTPS responses, or `None` for
+    /// plain HTTP. Mirrors the browser-side `Response::security_details`.
+    ///
+    /// See: <https://playwright.dev/docs/api/class-apiresponse#api-response-security-details>
+    pub fn security_details(&self) -> Option<&crate::protocol::response::SecurityDetails> {
+        self.security_details.as_ref()
+    }
+
+    /// Returns the server's resolved IP address and port for this response,
+    /// or `None` if unavailable.
+    ///
+    /// See: <https://playwright.dev/docs/api/class-apiresponse#api-response-server-addr>
+    pub fn server_addr(&self) -> Option<&crate::protocol::response::RemoteAddr> {
+        self.server_addr.as_ref()
     }
 
     /// Fetches and returns the response body as bytes.

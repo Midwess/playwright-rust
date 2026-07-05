@@ -9,32 +9,32 @@ fn steps() -> Vec<(&'static str, &'static str, &'static str)> {
         (
             "Wait for the app to render",
             snippets::WALK_01_RS,
-            "/receipts/steps/01.png",
+            "receipts/steps/01.png",
         ),
         (
             "Switch the comparison language",
             snippets::WALK_02_RS,
-            "/receipts/steps/02.png",
+            "receipts/steps/02.png",
         ),
         (
             "Switch the browser engine",
             snippets::WALK_03_RS,
-            "/receipts/steps/03.png",
+            "receipts/steps/03.png",
         ),
         (
             "Check every feature card",
             snippets::WALK_04_RS,
-            "/receipts/steps/04.png",
+            "receipts/steps/04.png",
         ),
         (
             "Verify the disclaimer",
             snippets::WALK_05_RS,
-            "/receipts/steps/05.png",
+            "receipts/steps/05.png",
         ),
         (
             "Redact elements with a mask",
             snippets::WALK_06_RS,
-            "/receipts/steps/06.png",
+            "receipts/steps/06.png",
         ),
     ]
 }

@@ -109,8 +109,11 @@ async fn test_register_custom_selector() {
     .await
     .expect("goto should succeed");
 
-    // Use the custom selector engine
-    let locator = page.locator("tag=article").await;
+    // Use the custom selector engine. A dynamically-built selector can be
+    // passed as an owned `String` — `locator` takes `impl Into<String>`, so
+    // no `&format!(...)` borrow is needed at the call site.
+    let engine = "tag";
+    let locator = page.locator(format!("{engine}=article")).await;
     let text = locator
         .text_content()
         .await

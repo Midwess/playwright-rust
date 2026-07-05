@@ -21,7 +21,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-const PLAYWRIGHT_VERSION: &str = "1.60.0";
+const PLAYWRIGHT_VERSION: &str = "1.61.1";
 const DRIVER_BASE_URL: &str = "https://playwright.azureedge.net/builds/driver";
 
 fn main() {

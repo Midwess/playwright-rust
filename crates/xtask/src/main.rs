@@ -14,6 +14,10 @@
 //!   fragment shown on the landing page in a binding prelude and runs
 //!   `cargo check`, so the site can't advertise code that doesn't
 //!   compile.
+//! - `verify-driver-version` — checks that every source/CI reference to
+//!   the bundled Playwright version (rustdoc/example install hints,
+//!   workflow cache keys) matches `PLAYWRIGHT_VERSION` in
+//!   `crates/playwright/build.rs`. The README is excluded on purpose.
 
 use anyhow::{Context as _, Result, bail};
 use axum::Router;
@@ -46,6 +50,12 @@ enum Cmd {
     /// (`crates/site/snippets/*.rs`) so the site can't advertise code
     /// that doesn't compile against the real `playwright-rs` API.
     VerifySiteSnippets,
+    /// Verify that every source/CI reference to the bundled Playwright
+    /// version (rustdoc/example install hints, workflow cache keys)
+    /// matches the single source of truth, `PLAYWRIGHT_VERSION` in
+    /// `crates/playwright/build.rs`. The README is intentionally excluded:
+    /// it tracks the latest crates.io release, not the in-tree version.
+    VerifyDriverVersion,
 }
 
 #[tokio::main]
@@ -54,6 +64,7 @@ async fn main() -> Result<()> {
         Cmd::RegenerateTraceFixture { out } => regenerate_trace_fixture(&out).await,
         Cmd::VerifyAgentDocs => verify_agent_docs(),
         Cmd::VerifySiteSnippets => verify_site_snippets(),
+        Cmd::VerifyDriverVersion => verify_driver_version(),
     }
 }
 
@@ -363,10 +374,143 @@ fn extract_no_run_blocks(path: &Path, content: &str) -> Vec<ExtractedBlock> {
 /// Resolve the workspace root by walking up from the xtask binary's
 /// `CARGO_MANIFEST_DIR` (which Cargo sets at compile time for the
 /// xtask crate to `crates/xtask`).
+/// Parses `PLAYWRIGHT_VERSION` out of `crates/playwright/build.rs`, the single
+/// source of truth for the bundled driver version.
+fn read_driver_version(root: &Path) -> Result<String> {
+    let build_rs = root.join("crates/playwright/build.rs");
+    let content = std::fs::read_to_string(&build_rs)
+        .with_context(|| format!("read {}", build_rs.display()))?;
+    let marker = "const PLAYWRIGHT_VERSION: &str = \"";
+    let start = content
+        .find(marker)
+        .context("PLAYWRIGHT_VERSION constant not found in build.rs")?
+        + marker.len();
+    let end = content[start..]
+        .find('"')
+        .context("unterminated PLAYWRIGHT_VERSION string literal")?
+        + start;
+    Ok(content[start..end].to_string())
+}
+
+/// Collects every `MAJOR.MINOR.PATCH` token that immediately follows `prefix`
+/// in `content` (e.g. `playwright@1.61.0` -> `1.61.0`).
+fn versions_after(content: &str, prefix: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = content;
+    while let Some(idx) = rest.find(prefix) {
+        rest = &rest[idx + prefix.len()..];
+        let ver: String = rest
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '.')
+            .collect();
+        if ver.contains('.') {
+            out.push(ver);
+        }
+    }
+    out
+}
+
+fn verify_driver_version() -> Result<()> {
+    let root = workspace_root();
+    let expected = read_driver_version(&root)?;
+
+    // (file, prefixes whose trailing version must equal `expected`). The README
+    // is deliberately absent: it mirrors the latest crates.io release, which may
+    // lag the in-tree (unreleased) driver version until the next release.
+    let targets: &[(&str, &[&str])] = &[
+        ("crates/playwright/src/lib.rs", &["playwright@"]),
+        (
+            "crates/playwright/examples/connect_over_cdp.rs",
+            &["playwright@"],
+        ),
+        (
+            ".github/workflows/test.yml",
+            &["pw-driver-", "playwright-browsers-"],
+        ),
+        (
+            ".github/workflows/release.yml",
+            &["pw-driver-", "playwright-browsers-"],
+        ),
+        (
+            ".github/workflows/pages.yml",
+            &["pw-driver-", "playwright-browsers-"],
+        ),
+    ];
+
+    let mut drift = Vec::new();
+    let mut checked = 0usize;
+    for (rel, prefixes) in targets {
+        let content =
+            std::fs::read_to_string(root.join(rel)).with_context(|| format!("read {rel}"))?;
+        for prefix in *prefixes {
+            for found in versions_after(&content, prefix) {
+                checked += 1;
+                if found != expected {
+                    drift.push(format!("  {rel}: `{prefix}{found}` (expected {expected})"));
+                }
+            }
+        }
+    }
+
+    if !drift.is_empty() {
+        bail!(
+            "verify-driver-version: {} reference(s) disagree with build.rs \
+             PLAYWRIGHT_VERSION = {expected}:\n{}\n\
+             Bump them to {expected}. (The README is excluded on purpose — it \
+             tracks the published crates.io release.)",
+            drift.len(),
+            drift.join("\n"),
+        );
+    }
+
+    println!(
+        "verify-driver-version: {checked} reference(s) match build.rs PLAYWRIGHT_VERSION = {expected}"
+    );
+    Ok(())
+}
+
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(|p| p.parent())
         .expect("xtask manifest dir has two parents")
         .to_path_buf()
+}
+
+#[cfg(test)]
+mod driver_version_tests {
+    use super::*;
+
+    #[test]
+    fn versions_after_extracts_each_occurrence() {
+        let text = "npx playwright@1.61.0 install\nkey: os-pw-driver-1.61.0\n\
+                    os-playwright-browsers-1.61.0-v2";
+        assert_eq!(versions_after(text, "playwright@"), vec!["1.61.0"]);
+        assert_eq!(versions_after(text, "pw-driver-"), vec!["1.61.0"]);
+        assert_eq!(versions_after(text, "playwright-browsers-"), vec!["1.61.0"]);
+    }
+
+    #[test]
+    fn versions_after_flags_a_stale_token() {
+        let text = "playwright@1.60.0 and playwright@1.61.0";
+        assert_eq!(
+            versions_after(text, "playwright@"),
+            vec!["1.60.0", "1.61.0"]
+        );
+    }
+
+    #[test]
+    fn versions_after_ignores_prefix_without_version() {
+        assert!(versions_after("playwright@latest", "playwright@").is_empty());
+    }
+
+    #[test]
+    fn build_rs_version_is_three_part_semver() {
+        let v = read_driver_version(&workspace_root()).unwrap();
+        assert_eq!(
+            v.split('.').count(),
+            3,
+            "expected MAJOR.MINOR.PATCH, got {v}"
+        );
+    }
 }

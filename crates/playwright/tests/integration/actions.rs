@@ -363,7 +363,7 @@ async fn test_action_options_methods() {
         .click_count(1)
         .build();
     mouse
-        .click(150, 150, Some(options))
+        .click(150.0, 150.0, Some(options))
         .await
         .expect("Failed to click with options");
 

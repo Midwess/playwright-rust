@@ -55,6 +55,29 @@ pub fn Features() -> impl IntoView {
                 >
                     <CodeBlock html=snippets::CARD_RESPONSIVE_RS/>
                 </FeatureCard>
+
+                // Unreleased 1.61.0 features worth a landing highlight — each
+                // card is `unreleased`, so it renders only on the dev build with
+                // an "Unreleased" badge. Drop `unreleased` when the feature ships.
+                // (Smaller 1.61.0 additions — apiResponse TLS details, screencast
+                // cursor, connectOverCDP artifactsDir — live in the CHANGELOG, not
+                // here.)
+                <FeatureCard
+                    id="feature-webstorage"
+                    title="Web storage"
+                    blurb="Read and write the page's localStorage / sessionStorage directly."
+                    unreleased=true
+                >
+                    <CodeBlock html=snippets::CARD_WEBSTORAGE_RS/>
+                </FeatureCard>
+                <FeatureCard
+                    id="feature-webauthn"
+                    title="WebAuthn passkeys"
+                    blurb="Install a virtual authenticator and manage credentials for auth tests."
+                    unreleased=true
+                >
+                    <CodeBlock html=snippets::CARD_WEBAUTHN_RS/>
+                </FeatureCard>
             </div>
         </section>
     }

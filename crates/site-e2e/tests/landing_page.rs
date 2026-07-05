@@ -18,11 +18,13 @@
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use axum::Router;
 use playwright_rs::protocol::{
-    Animations, AriaSnapshotOptions, Page, Playwright, ScreenshotOptions, StartHarOptions,
-    TracingStartOptions, TracingStopOptions,
+    ActionCursor, Animations, AriaSnapshotOptions, Page, Playwright, ScreencastStartOptions,
+    ScreenshotOptions, ShowActionsOptions, StartHarOptions, TracingStartOptions,
+    TracingStopOptions,
 };
 use playwright_rs::{expect, expect_page};
 use tower_http::services::ServeDir;
@@ -114,6 +116,21 @@ async fn landing_page_works_as_advertised() {
     page.goto(&format!("http://{addr}"), None)
         .await
         .expect("navigate to site");
+
+    // Asset paths (receipts, images) must be RELATIVE so they resolve under the
+    // version subpath (/vX.Y.Z/ or /dev/) on the deployed site, not the domain
+    // root. Root-absolute "/receipts/..." 404'd on the versioned deploy. The
+    // gate serves at root (where both resolve), so guard the invariant directly.
+    let abs_assets = page
+        .locator("img[src^='/receipts'], a[href^='/receipts'], img[src^='/crates-io']")
+        .await
+        .count()
+        .await
+        .expect("count root-absolute asset paths");
+    assert_eq!(
+        abs_assets, 0,
+        "receipt/image paths must be relative so they resolve under the version subpath"
+    );
 
     // Step 1: the SPA renders. The locator auto-waits for the WASM app to mount
     // and paint the hero, so there is no sleep or readiness polling.
@@ -287,6 +304,182 @@ async fn landing_page_works_as_advertised() {
         )))
         .await
         .expect("write trace receipt");
+
+    browser.close().await.ok();
+    server.abort();
+}
+
+/// The version switcher is fetch-driven (it reads `/versions.json` at runtime),
+/// so prove it boots, populates the dropdown from the manifest, and shows the
+/// "unreleased" banner on the dev build — served with a fixture manifest.
+#[tokio::test]
+async fn version_switcher_lists_versions_and_warns_on_dev() {
+    let dist = dist_dir();
+    if !dist.join("index.html").exists() {
+        eprintln!("skipping switcher test: {} not built.", dist.display());
+        return;
+    }
+
+    // Serve the built site, overlaying a fixture manifest the dev build can fetch.
+    let app = Router::new()
+        .route(
+            "/versions.json",
+            axum::routing::get(|| async {
+                (
+                    [(axum::http::header::CONTENT_TYPE, "application/json")],
+                    r#"{"latest":"9.9.9","versions":["9.9.9","0.14.0"]}"#,
+                )
+            }),
+        )
+        .fallback_service(ServeDir::new(&dist));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.expect("serve") });
+
+    let pw = Playwright::launch().await.expect("launch playwright");
+    let browser = pw.chromium().launch().await.expect("launch chromium");
+    let page = browser.new_page().await.expect("new page");
+    page.goto(&format!("http://{addr}"), None)
+        .await
+        .expect("navigate");
+
+    // The dropdown is always present; once the manifest loads it carries the
+    // published versions, and the dev build shows the unreleased banner.
+    expect(page.locator("#version-select").await)
+        .to_be_visible()
+        .await
+        .expect("version dropdown visible");
+    expect(page.locator("#version-select").await)
+        .to_contain_text("v0.14.0")
+        .await
+        .expect("dropdown lists published version from manifest");
+    expect(page.locator("text=Unreleased dev build").await)
+        .to_be_visible()
+        .await
+        .expect("dev build shows the unreleased banner");
+
+    browser.close().await.ok();
+    server.abort();
+}
+
+/// The dev (main HEAD) build advertises unreleased features in the
+/// "coming next" section; release snapshots omit it. The dogfood build is
+/// SITE_VERSION=dev, so the section + its cards must render and show real
+/// snippets — proving the /dev channel showcases what's coming.
+#[tokio::test]
+async fn dev_build_shows_unreleased_features() {
+    let dist = dist_dir();
+    if !dist.join("index.html").exists() {
+        eprintln!("skipping dev-features test: {} not built.", dist.display());
+        return;
+    }
+
+    let (addr, server) = serve(&dist).await;
+    let pw = Playwright::launch().await.expect("launch playwright");
+    let browser = pw.chromium().launch().await.expect("launch chromium");
+    let page = browser.new_page().await.expect("new page");
+    page.goto(&format!("http://{addr}"), None)
+        .await
+        .expect("navigate");
+
+    // The dev build adds unreleased feature cards into the Features grid, each
+    // carrying an "Unreleased" badge and a real (compile-checked) snippet.
+    let webstorage = page.locator("#feature-webstorage").await;
+    expect(webstorage.clone())
+        .to_be_visible()
+        .await
+        .expect("WebStorage card renders on the dev build");
+    expect(webstorage.clone())
+        .to_contain_text("UNRELEASED")
+        .await
+        .expect("WebStorage card carries the Unreleased badge");
+    expect(webstorage)
+        .to_contain_text("local_storage")
+        .await
+        .expect("WebStorage card shows the local_storage snippet");
+
+    // The dev build installs from git (main HEAD), not the crates.io version.
+    expect(page.locator("#install").await)
+        .to_contain_text("git = \"https://github.com/padamson/playwright-rust\"")
+        .await
+        .expect("dev build's install block uses a git dependency");
+
+    let webauthn = page.locator("#feature-webauthn").await;
+    expect(webauthn.clone())
+        .to_be_visible()
+        .await
+        .expect("WebAuthn card renders on the dev build");
+    expect(webauthn)
+        .to_contain_text("UNRELEASED")
+        .await
+        .expect("WebAuthn card carries the Unreleased badge");
+
+    // The dev build's hero badges reflect unreleased reality: crates.io shows
+    // "unreleased" (not the published version) and the Playwright badge tracks
+    // the newer bundled driver. Match on alt text (robust to the external
+    // shields image not loading in CI).
+    let crates_badge = page
+        .locator("#hero-badges img[alt='crates.io: unreleased']")
+        .await
+        .count()
+        .await
+        .expect("count crates.io badge");
+    assert_eq!(
+        crates_badge, 1,
+        "dev build shows the unreleased crates.io badge"
+    );
+    let pw_badge = page
+        .locator("#hero-badges img[alt='Playwright 1.61.1']")
+        .await
+        .count()
+        .await
+        .expect("count Playwright badge");
+    assert_eq!(pw_badge, 1, "dev build shows the 1.61.1 Playwright badge");
+
+    // Dogfood the unreleased screencast API: record the page with cursor
+    // decoration and save a frame as the DogfoodBanner's dev-only receipt.
+    let receipts = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../site/public/receipts");
+    std::fs::create_dir_all(&receipts).expect("create receipts dir");
+
+    let latest_frame: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
+    let sink = latest_frame.clone();
+    let screencast = page.screencast();
+    screencast.on_frame(move |frame| {
+        let sink = sink.clone();
+        async move {
+            *sink.lock().unwrap() = Some(frame.data.to_vec());
+            Ok(())
+        }
+    });
+    screencast
+        .start(ScreencastStartOptions::default())
+        .await
+        .expect("start screencast");
+    screencast
+        .show_actions(ShowActionsOptions::default().cursor(ActionCursor::Pointer))
+        .await
+        .expect("show_actions with pointer cursor");
+    // An interaction makes the cursor overlay appear and drives fresh frames.
+    page.locator("#cta-docs")
+        .await
+        .hover(None)
+        .await
+        .expect("hover the docs CTA");
+
+    // Poll for a streamed frame (no fixed pre-assert sleep).
+    let mut captured = None;
+    for _ in 0..60 {
+        if let Some(bytes) = latest_frame.lock().unwrap().clone() {
+            captured = Some(bytes);
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    screencast.stop().await.ok();
+    let frame = captured.expect("screencast should stream at least one frame");
+    std::fs::write(receipts.join("screencast.jpeg"), frame).expect("write screencast receipt");
 
     browser.close().await.ok();
     server.abort();

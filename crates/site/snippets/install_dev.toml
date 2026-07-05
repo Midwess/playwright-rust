@@ -1,0 +1,4 @@
+[dependencies]
+# Unreleased: tracks GitHub main HEAD (the features previewed below).
+playwright-rs = { git = "https://github.com/padamson/playwright-rust" }
+tokio = { version = "1", features = ["full"] }

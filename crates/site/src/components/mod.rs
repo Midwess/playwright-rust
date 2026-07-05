@@ -8,6 +8,7 @@ mod footer;
 mod hero;
 pub mod icons;
 mod install;
+mod version_switcher;
 mod walkthrough;
 
 pub use code_block::CodeBlock;
@@ -19,4 +20,5 @@ pub use features::Features;
 pub use footer::Footer;
 pub use hero::Hero;
 pub use install::Install;
+pub use version_switcher::VersionSwitcher;
 pub use walkthrough::Walkthrough;

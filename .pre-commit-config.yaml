@@ -27,13 +27,6 @@ repos:
       - id: mixed-line-ending
         name: Fix mixed line endings
 
-  # Spell checking
-  - repo: https://github.com/crate-ci/typos
-    rev: v1.26.8
-    hooks:
-      - id: typos
-        name: Check for typos
-
   # Rust-specific checks (matches CI exactly)
   - repo: local
     hooks:
@@ -95,6 +88,17 @@ repos:
         # Run when the snippet sources change OR when the crate API
         # surface changes.
         files: (docs/agent/|\.claude/skills/playwright-rs-usage/|crates/playwright/src/|crates/playwright-rs-macros/src/|crates/xtask/src/)
+
+      # 5b. Verify every source/CI reference to the bundled Playwright
+      # version matches build.rs PLAYWRIGHT_VERSION (README excluded —
+      # it tracks the published crates.io release).
+      - id: verify-driver-version
+        name: cargo xtask verify-driver-version
+        description: Check install hints and CI cache keys against build.rs PLAYWRIGHT_VERSION
+        entry: cargo xtask verify-driver-version
+        language: system
+        pass_filenames: false
+        files: (crates/playwright/build\.rs|crates/playwright/src/lib\.rs|crates/playwright/examples/connect_over_cdp\.rs|\.github/workflows/(test|release|pages)\.yml|crates/xtask/src/)
 
       # 6. Security audit (same as CI: cargo audit)
       - id: cargo-audit

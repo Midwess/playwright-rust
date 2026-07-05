@@ -1,3 +1,0 @@
-[dependencies]
-playwright-rs = "0.14"           # auto-updates within 0.14.x
-tokio = { version = "1", features = ["full"] }

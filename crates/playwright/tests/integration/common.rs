@@ -61,10 +61,36 @@ pub async fn setup_context() -> (Playwright, Browser, BrowserContext) {
 
 /// Resolve the Playwright `package/` directory via the crate's public driver
 /// lookup. Returns `None` if the driver can't be found anywhere, so tests
-/// that need to exec `node ... cli.js` can skip cleanly.
+/// that need to run scripts against the driver package can skip cleanly.
 pub fn playwright_package_dir() -> Option<PathBuf> {
-    let (_node, cli_js) = playwright_rs::server::driver::get_driver_executable().ok()?;
+    let (_deno, cli_js) = playwright_rs::server::driver::get_driver_executable().ok()?;
     cli_js.parent().map(PathBuf::from)
+}
+
+/// Spawn a CommonJS script under Deno (the runtime that executes the
+/// Playwright driver) with piped stdio. The script is written to a temp
+/// `.cjs` file because `deno eval` only evaluates ESM. Returns `None` if
+/// Deno or the driver can't be found, so tests can skip cleanly.
+pub fn spawn_driver_script(script: &str) -> Option<tokio::process::Child> {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static SCRIPT_SEQ: AtomicU32 = AtomicU32::new(0);
+
+    let (deno_exe, _cli_js) = playwright_rs::server::driver::get_driver_executable().ok()?;
+    let script_path = std::env::temp_dir().join(format!(
+        "playwright-rs-test-{}-{}.cjs",
+        std::process::id(),
+        SCRIPT_SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::write(&script_path, script).ok()?;
+
+    tokio::process::Command::new(deno_exe)
+        .args(playwright_rs::server::driver::DENO_RUN_ARGS)
+        .arg(&script_path)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .ok()
 }
 
 /// Poll `cond` until it returns `true` or `timeout` elapses; returns whether

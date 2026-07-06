@@ -155,6 +155,12 @@ fn extract_zip_to(
         let mut file = archive
             .by_index(i)
             .map_err(|e| io::Error::other(format!("zip read failed: {e}")))?;
+
+        // The driver runs under system Deno; skip the ~110 MB bundled Node.js.
+        if file.name() == "node" || file.name() == "node.exe" {
+            continue;
+        }
+
         let outpath = dest.join(file.name());
         if file.is_dir() {
             fs::create_dir_all(&outpath)?;
@@ -168,9 +174,7 @@ fn extract_zip_to(
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                if outpath.ends_with("node")
-                    || outpath.extension().and_then(|s| s.to_str()) == Some("sh")
-                {
+                if outpath.extension().and_then(|s| s.to_str()) == Some("sh") {
                     let mut perms = fs::metadata(&outpath)?.permissions();
                     perms.set_mode(0o755);
                     fs::set_permissions(&outpath, perms)?;

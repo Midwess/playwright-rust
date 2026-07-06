@@ -104,7 +104,7 @@ the detailed state of each class.
 └─────────────────────┬────────────────────────┘
                       │ JSON-RPC over stdio
 ┌─────────────────────▼────────────────────────┐
-│ Playwright Server (Node.js/TypeScript)       │
+│ Playwright Server (TypeScript, run by Deno)  │
 │ - Browser automation logic                   │
 │ - Cross-browser protocol abstraction         │
 │ - Maintained by Microsoft Playwright team    │
@@ -189,7 +189,7 @@ install_browsers(Some(&["chromium"])).await?;            // specific browsers
 ### Prerequisites
 
 - Rust 1.88+
-- Node.js 18+ (for Playwright server and browser installation)
+- Deno 2.x (runs the Playwright server and browser installation)
 - tokio async runtime
 
 ### Building from Source

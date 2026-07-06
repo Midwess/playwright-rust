@@ -1,8 +1,10 @@
 //! Build script for playwright-rs
 //!
-//! Downloads and extracts the Playwright Node.js driver from Azure CDN.
+//! Downloads and extracts the Playwright driver from Azure CDN.
 //! The runtime side (`src/server/driver.rs`) picks the path up via
-//! compile-time `option_env!()` lookups.
+//! compile-time `option_env!()` lookups and executes the driver's
+//! `cli.js` with a system-installed Deno; the Node.js binary shipped
+//! inside the driver archive is not extracted.
 //!
 //! By default the driver lands in Cargo's `$OUT_DIR` (inside `target/`),
 //! which is fine for local dev. Two env knobs tune it for CI:
@@ -159,6 +161,11 @@ fn download_and_extract_driver(drivers_dir: &Path, platform: &str) -> io::Result
             .by_index(i)
             .map_err(|e| io::Error::other(format!("Failed to read ZIP entry: {}", e)))?;
 
+        // The driver runs under system Deno; skip the ~110 MB bundled Node.js.
+        if file.name() == "node" || file.name() == "node.exe" {
+            continue;
+        }
+
         let outpath = extract_dir.join(file.name());
 
         if file.is_dir() {
@@ -175,10 +182,8 @@ fn download_and_extract_driver(drivers_dir: &Path, platform: &str) -> io::Result
             {
                 use std::os::unix::fs::PermissionsExt;
 
-                // Make executable: node binary and any shell scripts
-                if outpath.ends_with("node")
-                    || outpath.extension().and_then(|s| s.to_str()) == Some("sh")
-                {
+                // Make shell scripts executable
+                if outpath.extension().and_then(|s| s.to_str()) == Some("sh") {
                     let mut perms = fs::metadata(&outpath)?.permissions();
                     perms.set_mode(0o755);
                     fs::set_permissions(&outpath, perms)?;
@@ -207,17 +212,6 @@ fn set_output_env_vars(driver_dir: &Path, platform: &str) {
         PLAYWRIGHT_VERSION
     );
     println!("cargo:rustc-env=PLAYWRIGHT_DRIVER_PLATFORM={}", platform);
-
-    // Node executable path
-    let node_exe = if cfg!(windows) {
-        driver_dir.join("node.exe")
-    } else {
-        driver_dir.join("node")
-    };
-
-    if node_exe.exists() {
-        println!("cargo:rustc-env=PLAYWRIGHT_NODE_EXE={}", node_exe.display());
-    }
 
     // CLI.js path
     let cli_js = driver_dir.join("package").join("cli.js");

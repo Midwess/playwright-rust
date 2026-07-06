@@ -5,12 +5,10 @@ use playwright_rs::server::connection::Connection;
 use playwright_rs::server::playwright_server::PlaywrightServer;
 use playwright_rs::server::transport::PipeTransport;
 use serde_json::json;
-use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
-use tokio::process::Command;
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::protocol::Message;
 
@@ -29,7 +27,7 @@ async fn test_connection_lifecycle_with_real_server() {
         Ok(s) => s,
         Err(e) => {
             tracing::warn!("Skipping test: Could not launch Playwright server: {}", e);
-            tracing::warn!("This is expected if Node.js or Playwright driver is not available");
+            tracing::warn!("This is expected if Deno or Playwright driver is not available");
             return;
         }
     };
@@ -295,12 +293,12 @@ async fn test_connect_over_cdp_chromium_only() {
 
 /// Launch Chrome with --remote-debugging-port and return the CDP endpoint URL.
 ///
-/// Uses Playwright Node.js to find the Chrome binary and launch it with
+/// Uses the Playwright driver package to find the Chrome binary and launch it with
 /// remote debugging enabled, then discovers the CDP endpoint via /json/version.
 async fn start_chrome_with_cdp(
     package_path: &std::path::Path,
 ) -> Option<(tokio::process::Child, String)> {
-    // Node.js script that:
+    // Driver script that:
     // 1. Gets Chrome executable path from Playwright
     // 2. Spawns Chrome with --remote-debugging-port=0
     // 3. Reads the DevTools URL from stderr
@@ -353,14 +351,7 @@ setTimeout(() => {{
         package_path.display()
     );
 
-    let mut child = Command::new("node")
-        .arg("-e")
-        .arg(&script)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .ok()?;
+    let mut child = crate::common::spawn_driver_script(&script)?;
 
     let stdout = child.stdout.take()?;
     let mut reader = tokio::io::BufReader::new(stdout).lines();
@@ -683,7 +674,7 @@ async fn test_browser_type_connect() {
 
 /// Start a Playwright browser server using launchServer() and return the ws endpoint
 ///
-/// This creates a Node.js script that:
+/// This creates a driver script that:
 /// 1. Requires Playwright
 /// 2. Calls chromium.launchServer()
 /// 3. Outputs the WebSocket endpoint to stdout
@@ -691,7 +682,7 @@ async fn test_browser_type_connect() {
 async fn start_browser_server(
     package_path: &std::path::Path,
 ) -> Option<(tokio::process::Child, String)> {
-    // Node.js script to launch browser server
+    // Driver script to launch browser server
     let script = format!(
         r#"
 const {{ chromium }} = require('{}');
@@ -714,14 +705,7 @@ const {{ chromium }} = require('{}');
         package_path.display()
     );
 
-    let mut child = Command::new("node")
-        .arg("-e")
-        .arg(&script)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .ok()?;
+    let mut child = crate::common::spawn_driver_script(&script)?;
 
     let stdout = child.stdout.take()?;
     let mut reader = BufReader::new(stdout).lines();

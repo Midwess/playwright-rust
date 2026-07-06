@@ -11,7 +11,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub enum Error {
     /// Playwright server binary was not found
     ///
-    /// The Playwright Node.js driver could not be located.
+    /// The Playwright driver could not be located.
     /// To resolve this, install Playwright using: `npm install playwright`
     /// Or ensure the PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD environment variable is not set.
     #[error("Playwright server not found. Install with: npm install playwright")]
@@ -20,9 +20,9 @@ pub enum Error {
     /// Failed to launch the Playwright server process
     ///
     /// The Playwright server process could not be started.
-    /// Common causes: Node.js not installed, insufficient permissions, or port already in use.
+    /// Common causes: Deno not installed, insufficient permissions, or port already in use.
     /// Details: {0}
-    #[error("Failed to launch Playwright server: {0}. Check that Node.js is installed.")]
+    #[error("Failed to launch Playwright server: {0}. Check that Deno is installed.")]
     LaunchFailed(String),
 
     /// Server error (runtime issue with Playwright server)

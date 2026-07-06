@@ -1,291 +1,227 @@
 // Playwright driver management
 //
-// Handles locating and managing the Playwright Node.js driver.
-// Follows the same architecture as playwright-python, playwright-java, and playwright-dotnet.
+// Handles locating the Playwright driver JS package and the Deno runtime
+// that executes it. Unlike playwright-python, playwright-java, and
+// playwright-dotnet (which run the driver on the Node.js binary bundled
+// inside the driver archive), this crate executes the driver's `cli.js`
+// with a system-installed Deno (2.x) via Deno's Node compatibility layer.
 
 use crate::{Error, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Get the path to the Playwright driver executable
+/// Arguments prepended to every `deno` invocation that executes the
+/// Playwright driver's `cli.js`.
 ///
-/// This function attempts to locate the Playwright driver in the following order:
-/// 1. Bundled driver downloaded by build.rs (PRIMARY - matches official bindings)
+/// - `--allow-all`: the driver spawns browsers, binds sockets, and reads or
+///   writes arbitrary filesystem paths; a sandboxed driver cannot function.
+/// - `--unstable-detect-cjs`: the playwright npm package ships CommonJS
+///   without a `"type"` field in its package.json, so Deno needs the flag
+///   to load `cli.js` as CommonJS.
+/// - `--no-config` / `--no-lock`: never pick up a `deno.json` or
+///   `deno.lock` from the caller's working directory; the driver is
+///   self-contained.
+pub const DENO_RUN_ARGS: &[&str] = &[
+    "run",
+    "--allow-all",
+    "--unstable-detect-cjs",
+    "--no-config",
+    "--no-lock",
+];
+
+/// Get the paths needed to run the Playwright driver.
+///
+/// The driver `cli.js` is located in the following order:
+/// 1. Bundled driver downloaded by build.rs (PRIMARY)
 /// 2. User cache populated by `playwright-rs install` (stable across cargo install)
 /// 3. PLAYWRIGHT_DRIVER_PATH environment variable (user override)
-/// 4. PLAYWRIGHT_NODE_EXE and PLAYWRIGHT_CLI_JS environment variables (user override)
+/// 4. PLAYWRIGHT_CLI_JS environment variable (user override)
 /// 5. Global npm installation (`npm root -g`) (development fallback)
 /// 6. Local npm installation (`npm root`) (development fallback)
 ///
-/// Returns a tuple of (node_executable_path, cli_js_path).
+/// The Deno executable is resolved from PATH, `$DENO_INSTALL/bin`,
+/// `$HOME/.deno/bin`, and common install locations.
+///
+/// Returns a tuple of (deno_executable_path, cli_js_path).
 ///
 /// # Errors
 ///
-/// Returns `Error::ServerNotFound` if the driver cannot be located in any of the search paths.
+/// Returns `Error::ServerNotFound` if the driver cannot be located in any
+/// of the search paths, and `Error::LaunchFailed` if Deno is not installed.
 ///
 /// # Example
 ///
 /// ```no_run
 /// use playwright_rs::server::driver::get_driver_executable;
 ///
-/// let (node_exe, cli_js) = get_driver_executable()?;
-/// println!("Node: {}", node_exe.display());
+/// let (deno_exe, cli_js) = get_driver_executable()?;
+/// println!("Deno: {}", deno_exe.display());
 /// println!("CLI:  {}", cli_js.display());
 /// # Ok::<(), playwright_rs::Error>(())
 /// ```
 pub fn get_driver_executable() -> Result<(PathBuf, PathBuf)> {
-    if let Some(result) = try_bundled_driver()? {
-        return Ok(result);
-    }
+    let cli_js = try_bundled_cli()
+        .or_else(try_user_cache_cli)
+        .or_else(try_driver_path_env)
+        .or_else(try_cli_js_env)
+        .or_else(try_npm_global)
+        .or_else(try_npm_local)
+        .ok_or(Error::ServerNotFound)?;
 
-    if let Some(result) = try_user_cache_driver()? {
-        return Ok(result);
-    }
-
-    if let Some(result) = try_driver_path_env()? {
-        return Ok(result);
-    }
-
-    if let Some(result) = try_node_cli_env()? {
-        return Ok(result);
-    }
-
-    if let Some(result) = try_npm_global()? {
-        return Ok(result);
-    }
-
-    if let Some(result) = try_npm_local()? {
-        return Ok(result);
-    }
-
-    Err(Error::ServerNotFound)
+    let deno_exe = find_deno_executable()?;
+    Ok((deno_exe, cli_js))
 }
 
-/// Try to find bundled driver from build.rs
+/// Try to find the bundled driver's cli.js from build.rs
 ///
-/// This is the PRIMARY path and matches how playwright-python, playwright-java,
-/// and playwright-dotnet distribute their drivers.
-fn try_bundled_driver() -> Result<Option<(PathBuf, PathBuf)>> {
-    // Check if build.rs set the environment variables (compile-time)
-    if let (Some(node_exe), Some(cli_js)) = (
-        option_env!("PLAYWRIGHT_NODE_EXE"),
-        option_env!("PLAYWRIGHT_CLI_JS"),
-    ) {
-        let node_path = PathBuf::from(node_exe);
+/// This is the PRIMARY path: build.rs downloads the driver archive and
+/// records its location at compile time.
+fn try_bundled_cli() -> Option<PathBuf> {
+    if let Some(cli_js) = option_env!("PLAYWRIGHT_CLI_JS") {
         let cli_path = PathBuf::from(cli_js);
-
-        if node_path.exists() && cli_path.exists() {
-            return Ok(Some((node_path, cli_path)));
+        if cli_path.exists() {
+            return Some(cli_path);
         }
     }
 
-    // Fallback: Check PLAYWRIGHT_DRIVER_DIR and construct paths (compile-time)
     if let Some(driver_dir) = option_env!("PLAYWRIGHT_DRIVER_DIR") {
-        let driver_path = PathBuf::from(driver_dir);
-        let node_exe = if cfg!(windows) {
-            driver_path.join("node.exe")
-        } else {
-            driver_path.join("node")
-        };
-        let cli_js = driver_path.join("package").join("cli.js");
-
-        if node_exe.exists() && cli_js.exists() {
-            return Ok(Some((node_exe, cli_js)));
+        let cli_js = PathBuf::from(driver_dir).join("package").join("cli.js");
+        if cli_js.exists() {
+            return Some(cli_js);
         }
     }
 
-    Ok(None)
+    None
 }
 
-/// Try to find driver in the user cache populated by `playwright-rs install`.
+/// Try to find the driver in the user cache populated by `playwright-rs install`.
 ///
 /// The CLI bootstrap drops the driver at
 /// `<cache>/playwright-rust/<version>/playwright-<version>-<platform>/`,
 /// which survives `cargo install` cleanup of the build's `target/`. The
 /// version and platform come from compile-time env vars emitted by build.rs.
-fn try_user_cache_driver() -> Result<Option<(PathBuf, PathBuf)>> {
-    let Some(cache_dir) = dirs::cache_dir() else {
-        return Ok(None);
-    };
-    let (Some(version), Some(platform)) = (
-        option_env!("PLAYWRIGHT_DRIVER_VERSION"),
-        option_env!("PLAYWRIGHT_DRIVER_PLATFORM"),
-    ) else {
-        return Ok(None);
-    };
-    try_user_cache_driver_in(&cache_dir, version, platform)
+fn try_user_cache_cli() -> Option<PathBuf> {
+    let cache_dir = dirs::cache_dir()?;
+    let version = option_env!("PLAYWRIGHT_DRIVER_VERSION")?;
+    let platform = option_env!("PLAYWRIGHT_DRIVER_PLATFORM")?;
+    try_user_cache_cli_in(&cache_dir, version, platform)
 }
 
-/// Resolution helper for `try_user_cache_driver` parameterised by cache root,
+/// Resolution helper for `try_user_cache_cli` parameterised by cache root,
 /// version, and platform — exposed at module scope so tests can drive it
 /// with a `tempfile::tempdir()`.
-fn try_user_cache_driver_in(
-    cache_root: &Path,
-    version: &str,
-    platform: &str,
-) -> Result<Option<(PathBuf, PathBuf)>> {
-    let driver_dir = cache_root
+fn try_user_cache_cli_in(cache_root: &Path, version: &str, platform: &str) -> Option<PathBuf> {
+    let cli_js = cache_root
         .join("playwright-rust")
         .join(version)
-        .join(format!("playwright-{}-{}", version, platform));
+        .join(format!("playwright-{}-{}", version, platform))
+        .join("package")
+        .join("cli.js");
 
-    let node_exe = if platform.starts_with("win32") {
-        driver_dir.join("node.exe")
-    } else {
-        driver_dir.join("node")
-    };
-    let cli_js = driver_dir.join("package").join("cli.js");
-
-    if node_exe.exists() && cli_js.exists() {
-        Ok(Some((node_exe, cli_js)))
-    } else {
-        Ok(None)
-    }
+    cli_js.exists().then_some(cli_js)
 }
 
-/// Try to find driver from PLAYWRIGHT_DRIVER_PATH environment variable
+/// Try to find the driver from the PLAYWRIGHT_DRIVER_PATH environment variable
 ///
-/// User can set PLAYWRIGHT_DRIVER_PATH to a directory containing:
-/// - node (or node.exe on Windows)
-/// - package/cli.js
-fn try_driver_path_env() -> Result<Option<(PathBuf, PathBuf)>> {
-    if let Ok(driver_path) = std::env::var("PLAYWRIGHT_DRIVER_PATH") {
-        let driver_dir = PathBuf::from(driver_path);
-        let node_exe = if cfg!(windows) {
-            driver_dir.join("node.exe")
-        } else {
-            driver_dir.join("node")
-        };
-        let cli_js = driver_dir.join("package").join("cli.js");
-
-        if node_exe.exists() && cli_js.exists() {
-            return Ok(Some((node_exe, cli_js)));
-        }
-    }
-
-    Ok(None)
+/// User can set PLAYWRIGHT_DRIVER_PATH to a directory containing `package/cli.js`.
+fn try_driver_path_env() -> Option<PathBuf> {
+    let driver_path = std::env::var("PLAYWRIGHT_DRIVER_PATH").ok()?;
+    let cli_js = PathBuf::from(driver_path).join("package").join("cli.js");
+    cli_js.exists().then_some(cli_js)
 }
 
-/// Try to find driver from PLAYWRIGHT_NODE_EXE and PLAYWRIGHT_CLI_JS environment variables
+/// Try to find the driver from the PLAYWRIGHT_CLI_JS environment variable
 ///
-/// User can set both variables to explicitly specify paths.
-fn try_node_cli_env() -> Result<Option<(PathBuf, PathBuf)>> {
-    if let (Ok(node_exe), Ok(cli_js)) = (
-        std::env::var("PLAYWRIGHT_NODE_EXE"),
-        std::env::var("PLAYWRIGHT_CLI_JS"),
-    ) {
-        let node_path = PathBuf::from(node_exe);
-        let cli_path = PathBuf::from(cli_js);
-
-        if node_path.exists() && cli_path.exists() {
-            return Ok(Some((node_path, cli_path)));
-        }
-    }
-
-    Ok(None)
+/// User can set the variable to explicitly specify the cli.js path.
+fn try_cli_js_env() -> Option<PathBuf> {
+    let cli_js = PathBuf::from(std::env::var("PLAYWRIGHT_CLI_JS").ok()?);
+    cli_js.exists().then_some(cli_js)
 }
 
-/// Try to find driver in npm global installation (development fallback)
-fn try_npm_global() -> Result<Option<(PathBuf, PathBuf)>> {
-    let output = Command::new("npm").args(["root", "-g"]).output();
-
-    if let Ok(output) = output
-        && output.status.success()
-    {
-        let npm_root = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        let node_modules = PathBuf::from(npm_root);
-        if node_modules.exists()
-            && let Ok(paths) = find_playwright_in_node_modules(&node_modules)
-        {
-            return Ok(Some(paths));
-        }
+/// Try to find the driver in an npm global installation (development fallback)
+fn try_npm_global() -> Option<PathBuf> {
+    let output = Command::new("npm").args(["root", "-g"]).output().ok()?;
+    if !output.status.success() {
+        return None;
     }
-
-    Ok(None)
+    let npm_root = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    find_playwright_in_node_modules(&PathBuf::from(npm_root))
 }
 
-/// Try to find driver in npm local installation (development fallback)
-fn try_npm_local() -> Result<Option<(PathBuf, PathBuf)>> {
-    let output = Command::new("npm").args(["root"]).output();
-
-    if let Ok(output) = output
-        && output.status.success()
-    {
-        let npm_root = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        let node_modules = PathBuf::from(npm_root);
-        if node_modules.exists()
-            && let Ok(paths) = find_playwright_in_node_modules(&node_modules)
-        {
-            return Ok(Some(paths));
-        }
+/// Try to find the driver in a local npm installation (development fallback)
+fn try_npm_local() -> Option<PathBuf> {
+    let output = Command::new("npm").args(["root"]).output().ok()?;
+    if !output.status.success() {
+        return None;
     }
-
-    Ok(None)
+    let npm_root = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    find_playwright_in_node_modules(&PathBuf::from(npm_root))
 }
 
-/// Find Playwright CLI in node_modules directory
-///
-/// Returns (node_executable, cli_js_path)
-fn find_playwright_in_node_modules(node_modules: &Path) -> Result<(PathBuf, PathBuf)> {
-    // Look for playwright or @playwright/test package
+/// Find the Playwright cli.js in a node_modules directory
+fn find_playwright_in_node_modules(node_modules: &Path) -> Option<PathBuf> {
     let playwright_dirs = [
         node_modules.join("playwright"),
         node_modules.join("@playwright").join("test"),
     ];
 
     for playwright_dir in &playwright_dirs {
-        if !playwright_dir.exists() {
-            continue;
-        }
-
-        // Find cli.js in the package
         let cli_js = playwright_dir.join("cli.js");
-        if !cli_js.exists() {
-            continue;
-        }
-
-        // Find node executable from PATH
-        if let Ok(node_exe) = find_node_executable() {
-            return Ok((node_exe, cli_js));
+        if cli_js.exists() {
+            return Some(cli_js);
         }
     }
 
-    Err(Error::ServerNotFound)
+    None
 }
 
-/// Find the node executable in PATH or common locations
-fn find_node_executable() -> Result<PathBuf> {
-    // Try which/where command first
+/// Find the Deno executable in PATH or common install locations
+fn find_deno_executable() -> Result<PathBuf> {
     #[cfg(not(windows))]
     let which_cmd = "which";
     #[cfg(windows)]
     let which_cmd = "where";
 
-    if let Ok(output) = Command::new(which_cmd).arg("node").output()
+    if let Ok(output) = Command::new(which_cmd).arg("deno").output()
         && output.status.success()
     {
-        let node_path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if !node_path.is_empty() {
-            let path = PathBuf::from(node_path.lines().next().unwrap_or(&node_path));
+        let deno_path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !deno_path.is_empty() {
+            let path = PathBuf::from(deno_path.lines().next().unwrap_or(&deno_path));
             if path.exists() {
                 return Ok(path);
             }
         }
     }
 
-    // Try common locations
+    let deno_bin = if cfg!(windows) { "deno.exe" } else { "deno" };
+
+    if let Ok(install_root) = std::env::var("DENO_INSTALL") {
+        let path = PathBuf::from(install_root).join("bin").join(deno_bin);
+        if path.exists() {
+            return Ok(path);
+        }
+    }
+
+    if let Some(home) = dirs::home_dir() {
+        let path = home.join(".deno").join("bin").join(deno_bin);
+        if path.exists() {
+            return Ok(path);
+        }
+    }
+
     #[cfg(not(windows))]
     let common_locations = [
-        "/usr/local/bin/node",
-        "/usr/bin/node",
-        "/opt/homebrew/bin/node",
-        "/opt/local/bin/node",
+        "/usr/local/bin/deno",
+        "/usr/bin/deno",
+        "/opt/homebrew/bin/deno",
+        "/opt/local/bin/deno",
     ];
 
     #[cfg(windows)]
     let common_locations = [
-        "C:\\Program Files\\nodejs\\node.exe",
-        "C:\\Program Files (x86)\\nodejs\\node.exe",
+        "C:\\Program Files\\deno\\deno.exe",
+        "C:\\ProgramData\\chocolatey\\bin\\deno.exe",
     ];
 
     for location in &common_locations {
@@ -296,15 +232,15 @@ fn find_node_executable() -> Result<PathBuf> {
     }
 
     Err(Error::LaunchFailed(
-        "Node.js executable not found. Please install Node.js or set PLAYWRIGHT_NODE_EXE."
+        "Deno executable not found. Install Deno 2.x (https://deno.com) or add it to PATH."
             .to_string(),
     ))
 }
 
 /// Install Playwright browsers programmatically.
 ///
-/// Finds the bundled Playwright driver and runs:
-/// `<driver>/node <driver>/package/cli.js install [browsers...]`
+/// Finds the Playwright driver and runs:
+/// `deno run --allow-all <driver>/package/cli.js install [browsers...]`
 ///
 /// # Parameters
 ///
@@ -319,8 +255,8 @@ fn find_node_executable() -> Result<PathBuf> {
 /// # Errors
 ///
 /// - [`Error::ServerNotFound`] if the Playwright driver cannot be located.
-/// - [`Error::LaunchFailed`] if the installation process exits with a non-zero
-///   status or fails to spawn.
+/// - [`Error::LaunchFailed`] if Deno is not installed, or the installation
+///   process exits with a non-zero status or fails to spawn.
 ///
 /// # Example
 ///
@@ -356,8 +292,8 @@ pub async fn install_browsers(browsers: Option<&[&str]>) -> Result<()> {
 /// # Errors
 ///
 /// - [`Error::ServerNotFound`] if the Playwright driver cannot be located.
-/// - [`Error::LaunchFailed`] if the installation process exits with a non-zero
-///   status or fails to spawn.
+/// - [`Error::LaunchFailed`] if Deno is not installed, or the installation
+///   process exits with a non-zero status or fails to spawn.
 ///
 /// # Example
 ///
@@ -378,10 +314,10 @@ pub async fn install_browsers_with_deps(browsers: Option<&[&str]>) -> Result<()>
 
 /// Internal implementation shared by [`install_browsers`] and [`install_browsers_with_deps`].
 async fn install_browsers_impl(browsers: Option<&[&str]>, with_deps_forced: bool) -> Result<()> {
-    let (node_exe, cli_js) = get_driver_executable()?;
+    let (deno_exe, cli_js) = get_driver_executable()?;
 
-    let mut cmd = tokio::process::Command::new(&node_exe);
-    cmd.arg(&cli_js).arg("install");
+    let mut cmd = tokio::process::Command::new(&deno_exe);
+    cmd.args(DENO_RUN_ARGS).arg(&cli_js).arg("install");
 
     if let Some(browser_list) = browsers {
         for browser in browser_list {
@@ -418,20 +354,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_find_node_executable() {
-        // This should succeed on any system with Node.js installed
-        let result = find_node_executable();
+    fn test_find_deno_executable() {
+        // This should succeed on any system with Deno installed
+        let result = find_deno_executable();
         match result {
-            Ok(node_path) => {
-                tracing::info!("Found node at: {:?}", node_path);
-                assert!(node_path.exists());
+            Ok(deno_path) => {
+                tracing::info!("Found deno at: {:?}", deno_path);
+                assert!(deno_path.exists());
             }
             Err(e) => {
-                tracing::warn!(
-                    "Node.js not found (expected if Node.js not installed): {:?}",
-                    e
-                );
-                // Don't fail the test if Node.js is not installed
+                tracing::warn!("Deno not found (expected if Deno not installed): {:?}", e);
+                // Don't fail the test if Deno is not installed
             }
         }
     }
@@ -441,11 +374,11 @@ mod tests {
         // This test will pass if any driver source is available
         let result = get_driver_executable();
         match result {
-            Ok((node, cli)) => {
+            Ok((deno, cli)) => {
                 tracing::info!("Found Playwright driver:");
-                tracing::info!("  Node: {:?}", node);
+                tracing::info!("  Deno: {:?}", deno);
                 tracing::info!("  CLI:  {:?}", cli);
-                assert!(node.exists());
+                assert!(deno.exists());
                 assert!(cli.exists());
             }
             Err(Error::ServerNotFound) => {
@@ -454,31 +387,30 @@ mod tests {
                     "This is OK - driver will be bundled at build time or can be installed via npm"
                 );
             }
+            Err(Error::LaunchFailed(msg)) => {
+                tracing::warn!("Deno not found (expected in some environments): {msg}");
+            }
             Err(e) => panic!("Unexpected error: {:?}", e),
         }
     }
 
     #[test]
-    fn test_bundled_driver_detection() {
-        // Test that we can detect bundled driver if build.rs set env vars
-        let result = try_bundled_driver();
+    fn test_bundled_cli_detection() {
+        // Test that we can detect the bundled driver if build.rs set env vars
+        let result = try_bundled_cli();
         match result {
-            Ok(Some((node, cli))) => {
-                tracing::info!("Found bundled driver:");
-                tracing::info!("  Node: {:?}", node);
-                tracing::info!("  CLI:  {:?}", cli);
-                assert!(node.exists());
+            Some(cli) => {
+                tracing::info!("Found bundled driver cli.js: {:?}", cli);
                 assert!(cli.exists());
             }
-            Ok(None) => {
+            None => {
                 tracing::info!("No bundled driver (expected during development)");
             }
-            Err(e) => panic!("Unexpected error: {:?}", e),
         }
     }
 
     #[test]
-    fn try_user_cache_driver_in_resolves_when_files_present() {
+    fn try_user_cache_cli_in_resolves_when_files_present() {
         let temp = tempfile::tempdir().unwrap();
         let driver_subdir = temp
             .path()
@@ -486,20 +418,16 @@ mod tests {
             .join("1.60.0")
             .join("playwright-1.60.0-linux");
         std::fs::create_dir_all(driver_subdir.join("package")).unwrap();
-        std::fs::write(driver_subdir.join("node"), b"").unwrap();
         std::fs::write(driver_subdir.join("package").join("cli.js"), b"").unwrap();
 
-        let (node, cli) = try_user_cache_driver_in(temp.path(), "1.60.0", "linux")
-            .unwrap()
-            .unwrap();
-        assert!(node.exists());
+        let cli = try_user_cache_cli_in(temp.path(), "1.60.0", "linux").unwrap();
         assert!(cli.exists());
     }
 
     #[test]
-    fn try_user_cache_driver_in_returns_none_when_absent() {
+    fn try_user_cache_cli_in_returns_none_when_absent() {
         let temp = tempfile::tempdir().unwrap();
-        let result = try_user_cache_driver_in(temp.path(), "1.60.0", "linux").unwrap();
+        let result = try_user_cache_cli_in(temp.path(), "1.60.0", "linux");
         assert!(result.is_none());
     }
 
@@ -519,30 +447,6 @@ mod tests {
         assert!(
             dir.contains(&build_marker) && dir.contains(&out_marker),
             "PLAYWRIGHT_DRIVER_DIR should sit under target/<profile>/build/playwright-rs-<hash>/out, got: {dir}"
-        );
-    }
-
-    #[test]
-    fn try_user_cache_driver_in_uses_node_exe_for_windows_platforms() {
-        let temp = tempfile::tempdir().unwrap();
-        let driver_subdir = temp
-            .path()
-            .join("playwright-rust")
-            .join("1.60.0")
-            .join("playwright-1.60.0-win32_x64");
-        std::fs::create_dir_all(driver_subdir.join("package")).unwrap();
-        std::fs::write(driver_subdir.join("node.exe"), b"").unwrap();
-        std::fs::write(driver_subdir.join("package").join("cli.js"), b"").unwrap();
-
-        let (node, _cli) = try_user_cache_driver_in(temp.path(), "1.60.0", "win32_x64")
-            .unwrap()
-            .unwrap();
-        assert!(
-            node.file_name()
-                .unwrap()
-                .to_str()
-                .unwrap()
-                .ends_with(".exe")
         );
     }
 }

@@ -1,16 +1,16 @@
 // Playwright server management
 //
 // Handles downloading, launching, and managing the lifecycle of the Playwright
-// Node.js server process.
+// driver process (executed by Deno).
 
-use crate::server::driver::get_driver_executable;
+use crate::server::driver::{DENO_RUN_ARGS, get_driver_executable};
 use crate::{Error, Result};
 use tokio::process::{Child, Command};
 use tracing::Instrument;
 
 /// Manages the Playwright server process lifecycle
 ///
-/// The PlaywrightServer wraps a Node.js child process that runs the Playwright
+/// The PlaywrightServer wraps a Deno child process that runs the Playwright
 /// driver. It communicates with the server via stdio pipes using JSON-RPC protocol.
 ///
 /// # Example
@@ -40,22 +40,23 @@ impl PlaywrightServer {
     ///
     /// This will:
     /// 1. Check if the Playwright driver exists (download if needed)
-    /// 2. Launch the server using `node <driver>/cli.js run-driver`
+    /// 2. Launch the server using `deno run --allow-all <driver>/cli.js run-driver`
     /// 3. Set environment variable `PW_LANG_NAME=rust`
     ///
     /// # Errors
     ///
     /// Returns `Error::ServerNotFound` if the driver cannot be located.
-    /// Returns `Error::LaunchFailed` if the process fails to start.
+    /// Returns `Error::LaunchFailed` if Deno is not installed or the process
+    /// fails to start.
     ///
     /// See: <https://playwright.dev/docs/api>
     pub async fn launch() -> Result<Self> {
-        // Get the driver executable paths
-        // The driver should already be downloaded by build.rs
-        let (node_exe, cli_js) = get_driver_executable()?;
+        // Get the driver paths. The driver package should already be
+        // downloaded by build.rs; Deno is resolved from the system.
+        let (deno_exe, cli_js) = get_driver_executable()?;
 
         // Launch the server process. Stderr is piped (not inherited)
-        // because the Node driver writes terminal-capability queries
+        // because the driver writes terminal-capability queries
         // and other escape sequences to its stderr while alive. With
         // stderr inherited, those bytes clobber the user's tty and
         // break shell line-editing after a Ctrl-C while the driver is
@@ -63,8 +64,9 @@ impl PlaywrightServer {
         // the piped stderr in a background task and forward each line
         // via `tracing::debug!` so users with tracing enabled can
         // still see driver diagnostics.
-        let mut cmd = Command::new(&node_exe);
-        cmd.arg(&cli_js)
+        let mut cmd = Command::new(&deno_exe);
+        cmd.args(DENO_RUN_ARGS)
+            .arg(&cli_js)
             .arg("run-driver")
             .env("PW_LANG_NAME", "rust")
             .env("PW_LANG_NAME_VERSION", env!("CARGO_PKG_RUST_VERSION"))
@@ -73,13 +75,13 @@ impl PlaywrightServer {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 
-        // Put the Node driver in its own process group so a Ctrl-C in
+        // Put the driver in its own process group so a Ctrl-C in
         // the user's shell (which sends SIGINT to the foreground process
-        // group) doesn't reach Node. When our process dies, Node's stdin
-        // pipe closes and the driver runs `gracefullyProcessExitDoNotHang`
-        // — a quiet, browser-aware shutdown. Without this isolation, Node
-        // gets SIGINT'd alongside us and races a noisy EPIPE error path
-        // that writes terminal-capability queries to stderr; the
+        // group) doesn't reach it. When our process dies, the driver's
+        // stdin pipe closes and it runs `gracefullyProcessExitDoNotHang`
+        // — a quiet, browser-aware shutdown. Without this isolation, the
+        // driver gets SIGINT'd alongside us and races a noisy EPIPE error
+        // path that writes terminal-capability queries to stderr; the
         // terminal's responses then pollute bash's stdin buffer and
         // disrupt readline. See issue #59.
         // process_group is on tokio::process::Command directly (Unix
@@ -94,7 +96,7 @@ impl PlaywrightServer {
             .spawn()
             .map_err(|e| Error::LaunchFailed(format!("Failed to spawn process: {}", e)))?;
 
-        // Drain Node's stderr in a background task. Without an active
+        // Drain the driver's stderr in a background task. Without an active
         // reader the kernel pipe buffer would eventually fill and
         // block the driver's writes; we don't want that. Bytes are
         // forwarded line-by-line via `tracing::debug!` so they're
@@ -269,19 +271,19 @@ mod tests {
                 );
             }
             Err(Error::ServerNotFound) => {
-                // This can happen if npm is not installed or download fails
+                // This can happen if the driver download failed
                 tracing::warn!(
                     "Could not launch server: Playwright not found and download may have failed"
                 );
                 tracing::warn!(
                     "To run this test, install Playwright manually: npm install playwright"
                 );
-                // Don't fail the test - this is expected in CI without Node.js
+                // Don't fail the test - this is expected in CI without the driver
             }
             Err(Error::LaunchFailed(msg)) => {
                 tracing::warn!("Launch failed: {}", msg);
-                tracing::warn!("This may be expected if Node.js or npm is not installed");
-                // Don't fail - expected in environments without Node.js
+                tracing::warn!("This may be expected if Deno is not installed");
+                // Don't fail - expected in environments without Deno
             }
             Err(e) => panic!("Unexpected error: {:?}", e),
         }
@@ -298,7 +300,7 @@ mod tests {
             assert!(kill_result.is_ok(), "Kill failed: {:?}", kill_result);
         } else {
             // Server didn't launch, that's okay for this test
-            tracing::warn!("Server didn't launch (expected without Node.js/Playwright)");
+            tracing::warn!("Server didn't launch (expected without Deno/Playwright)");
         }
     }
 }

@@ -83,6 +83,13 @@ fn main() {
             println!(
                 "cargo:warning=You can set PLAYWRIGHT_DRIVER_PATH to specify driver location."
             );
+            // The version is a compile-time constant, independent of whether the
+            // download succeeded. Emit it so `env!("PLAYWRIGHT_DRIVER_VERSION")` in
+            // lib.rs still compiles when the download fails (e.g. the legacy
+            // playwright.azureedge.net CDN, now 404). The deno runtime resolves
+            // cli.js from npm, not this bundled driver, so a failed download is
+            // recoverable at runtime and must not be a hard compile error.
+            println!("cargo:rustc-env=PLAYWRIGHT_DRIVER_VERSION={PLAYWRIGHT_VERSION}");
         }
     }
 }
